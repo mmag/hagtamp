@@ -16,3 +16,8 @@ src-tauri/WixTools/
 # env
 .env
 .env.*
+
+
+# Added by cargo
+
+/target
