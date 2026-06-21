@@ -1,0 +1,188 @@
+.media-library {
+  display: flex;
+  flex-direction: column;
+  background: #1a1a1a;
+  border: 2px solid #3a3a3a;
+  font-family: "Courier New", monospace;
+  color: #c8c8c8;
+  height: 100%;
+  min-width: 320px;
+}
+
+.ml-header {
+  background: #2a2a2a;
+  border-bottom: 1px solid #3a3a3a;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ml-title {
+  font-size: 10px;
+  font-weight: bold;
+  color: #00aaff;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.ml-search {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+}
+
+.ml-search input {
+  flex: 1;
+  background: #111;
+  border: 1px solid #444;
+  color: #c8c8c8;
+  font-family: "Courier New", monospace;
+  font-size: 10px;
+  padding: 3px 6px;
+  outline: none;
+}
+
+.ml-search input:focus {
+  border-color: #00aaff;
+}
+
+.ml-search button {
+  background: #333;
+  border: 1px solid #555;
+  color: #00aaff;
+  font-family: "Courier New", monospace;
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.ml-search button:hover {
+  background: #444;
+}
+
+.ml-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid #2a2a2a;
+  background: #222;
+}
+
+.ml-nav button {
+  background: transparent;
+  border: 1px solid #444;
+  color: #aaa;
+  font-family: "Courier New", monospace;
+  font-size: 9px;
+  padding: 2px 8px;
+  cursor: pointer;
+  letter-spacing: 1px;
+}
+
+.ml-nav button:hover,
+.ml-nav button.active {
+  border-color: #00aaff;
+  color: #00aaff;
+}
+
+.ml-breadcrumb {
+  font-size: 9px;
+  color: #666;
+  margin-left: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ml-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.ml-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.ml-content::-webkit-scrollbar-track {
+  background: #111;
+}
+
+.ml-content::-webkit-scrollbar-thumb {
+  background: #444;
+}
+
+.ml-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ml-list li {
+  display: flex;
+  align-items: center;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid #222;
+  gap: 6px;
+}
+
+.ml-list li:hover {
+  background: #2a2a2a;
+}
+
+.ml-item-name {
+  flex: 1;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ml-item-meta {
+  font-size: 9px;
+  color: #666;
+  white-space: nowrap;
+}
+
+.ml-track-num {
+  font-size: 9px;
+  color: #555;
+  min-width: 20px;
+  text-align: right;
+}
+
+.ml-track-actions {
+  padding: 4px 8px;
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid #222;
+}
+
+.ml-track-actions button {
+  background: #282828;
+  border: 1px solid #444;
+  color: #aaa;
+  font-family: "Courier New", monospace;
+  font-size: 9px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.ml-track-actions button:hover {
+  background: #333;
+  color: #00aaff;
+  border-color: #00aaff;
+}
+
+.ml-status {
+  padding: 16px;
+  font-size: 11px;
+  color: #555;
+}
+
+.ml-error {
+  color: #ff4444;
+}
