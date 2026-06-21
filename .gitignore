@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.DS_Store
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/WixTools/
+
+# Vite
+*.local
+
+# Editor
+.vscode/
+.idea/
+
+# env
+.env
+.env.*
