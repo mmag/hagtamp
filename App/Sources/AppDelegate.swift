@@ -1,4 +1,5 @@
 import AppKit
+import ClassicUI
 import SkinKit
 import UniformTypeIdentifiers
 
@@ -59,6 +60,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.message = "Choose a skin (.wsz) or an unpacked skin folder"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         loadSkin(from: url)
+    }
+
+    var textScale: Double { windows.textSize.scale }
+
+    func setTextScale(_ scale: Double) {
+        windows.textSize = TextSize(scale: scale)
     }
 
     @objc func playURL(_ sender: Any?) {

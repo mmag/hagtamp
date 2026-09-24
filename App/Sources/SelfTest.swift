@@ -25,6 +25,7 @@ enum SelfTest {
             print("selftest: \(url.lastPathComponent) \(layout(manager))")
         }
 
+        manager.textSize = .normal  // steps click rows by pixel, at Winamp's size
         snap("start")
 
         Task { @MainActor in
@@ -39,6 +40,7 @@ enum SelfTest {
             snapPreferences(to: output.appendingPathComponent("preferences-library.png"))
             await navidromeSteps(manager, snap: snap)
             uiSteps(manager, snap: snap)
+            await textSizeSteps(manager, snap: snap)
             await controlSteps(manager, output: output)
             layoutSteps(manager)
             NSApp.terminate(nil)
@@ -230,6 +232,21 @@ enum SelfTest {
         await wait("resume: stop forgets the spot") { model.status == .playing && model.elapsed > 0.05 && model.elapsed < saved - 0.5 }
         model.stop()
         model.resumesPosition = false
+    }
+
+    /// Larger text: rows grow with it, fewer fit, clicks still find their row.
+    private static func textSizeSteps(_ manager: WindowManager, snap: (String) -> Void) async {
+        let library = manager.localLibrary
+        manager.toggleLocalLibrary()
+        library.chooseViewForTesting(0)
+        await wait("library for text size") { library.summary.contains("artists=3") }
+        library.selectForTesting(row: 0, in: 0)
+        await wait("library tracks for text size") { !library.summary.contains("songs=0 ") }
+        manager.textSize = TextSize(scale: 1.5)
+        snap("text-150")
+        print("selftest: text size 150%: row height \(manager.textSize.rowHeight) px, font \(manager.textSize.fontSize) pt")
+        manager.toggleLocalLibrary()
+        manager.textSize = .normal
     }
 
     /// Winamp's menu and keys, media controls, the stop variants and skins.

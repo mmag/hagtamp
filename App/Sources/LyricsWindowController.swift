@@ -53,7 +53,8 @@ final class LyricsWindowController: SkinWindowController {
     }
 
     private func layout(_ lyrics: Lyrics) -> LyricsLayout {
-        LyricsLayout(lines: lyrics.lines.map(\.text), width: width, height: height, fontName: manager.skin.playlistStyle.font)
+        LyricsLayout(
+            lines: lyrics.lines.map(\.text), width: width, height: height, fontName: manager.skin.playlistStyle.font, textSize: manager.textSize)
     }
 
     override func renderBitmap() -> Bitmap {
@@ -63,6 +64,7 @@ final class LyricsWindowController: SkinWindowController {
         frame.widthSteps = widthSteps
         frame.heightSteps = heightSteps
         var state = LyricsWindowState(frame: frame)
+        state.textSize = manager.textSize
 
         let url = track?.url
         if url != shownTrack {
@@ -155,7 +157,7 @@ final class LyricsWindowController: SkinWindowController {
     func clickLineForTesting(_ line: Int) {
         guard let lyrics, let row = layout(lyrics).rows.firstIndex(where: { $0.line == line }) else { return }
         firstRow = min(row, layout(lyrics).maxFirstRow)
-        let y = layout(lyrics).area.y + (row - firstRow) * LyricsLayout.rowHeight + 2
+        let y = layout(lyrics).area.y + (row - firstRow) * layout(lyrics).rowHeight + 2
         _ = pressBegan(.trackList, at: SkinPoint(x: content.x + 20, y: y), event: NSEvent())
     }
 

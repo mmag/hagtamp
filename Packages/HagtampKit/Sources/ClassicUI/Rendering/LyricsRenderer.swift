@@ -11,6 +11,7 @@ public struct LyricsWindowState: Sendable {
     public var message: String?
     /// Scroll position, in wrapped rows.
     public var firstRow = 0
+    public var textSize = TextSize.normal
 
     public init(frame: GenWindowState) {
         self.frame = frame
@@ -19,22 +20,25 @@ public struct LyricsWindowState: Sendable {
 
 /// Lines wrapped to the window, one row each; shared by rendering and clicks.
 public struct LyricsLayout: Sendable {
-    public static let rowHeight = 13
     public let area: PixelRect
+    public let rowHeight: Int
+    public let textSize: TextSize
     /// Wrapped rows and the lyrics line each belongs to.
     public let rows: [(line: Int, text: String)]
 
-    public init(lines: [String], width: Int, height: Int, fontName: String) {
+    public init(lines: [String], width: Int, height: Int, fontName: String, textSize: TextSize = .normal) {
+        self.textSize = textSize
+        rowHeight = textSize.rowHeight
         let content = GenWindowRenderer.contentRect(width: width, height: height)
         area = PixelRect(x: content.x + 6, y: content.y + 4, width: max(1, content.width - 12), height: max(1, content.height - 8))
         var rows: [(Int, String)] = []
         for (index, line) in lines.enumerated() {
-            for row in Self.wrap(line, width: area.width, fontName: fontName) { rows.append((index, row)) }
+            for row in Self.wrap(line, width: area.width, fontName: fontName, size: textSize.fontSize) { rows.append((index, row)) }
         }
         self.rows = rows
     }
 
-    public var visibleRows: Int { max(1, area.height / Self.rowHeight) }
+    public var visibleRows: Int { max(1, area.height / rowHeight) }
     public var maxFirstRow: Int { max(0, rows.count - visibleRows) }
 
     /// The scroll position that puts `line` in the middle.
@@ -45,15 +49,15 @@ public struct LyricsLayout: Sendable {
     }
 
     public func line(atY y: Int, firstRow: Int) -> Int? {
-        guard y >= area.y, y < area.y + visibleRows * Self.rowHeight else { return nil }
-        let row = firstRow + (y - area.y) / Self.rowHeight
+        guard y >= area.y, y < area.y + visibleRows * rowHeight else { return nil }
+        let row = firstRow + (y - area.y) / rowHeight
         return rows.indices.contains(row) ? rows[row].line : nil
     }
 
     /// Word wrap; a word longer than the width is cut where it must.
-    static func wrap(_ text: String, width: Int, fontName: String) -> [String] {
+    static func wrap(_ text: String, width: Int, fontName: String, size: CGFloat = 9) -> [String] {
         guard !text.isEmpty else { return [""] }
-        func fits(_ s: String) -> Bool { SystemText.width(s, fontName: fontName) <= width }
+        func fits(_ s: String) -> Bool { SystemText.width(s, fontName: fontName, size: size) <= width }
         var rows: [String] = []
         var current = ""
         for word in text.split(separator: " ", omittingEmptySubsequences: true).map(String.init) {
@@ -84,15 +88,19 @@ public enum LyricsRenderer {
         var frame = state.frame
         frame.contentColor = style.normalBackground
         var canvas = GenWindowRenderer.render(skin, frame)
-        let layout = LyricsLayout(lines: state.lines, width: frame.pixelWidth, height: frame.pixelHeight, fontName: style.font)
+        let layout = LyricsLayout(
+            lines: state.lines, width: frame.pixelWidth, height: frame.pixelHeight, fontName: style.font, textSize: state.textSize)
+        let size = state.textSize.fontSize
         if let message = state.message ?? (state.lines.isEmpty ? "" : nil) {
-            SystemText.draw(&canvas, message, in: layout.area, color: style.normal, fontName: style.font, alignment: .center)
+            SystemText.draw(&canvas, message, in: layout.area, color: style.normal, fontName: style.font, size: size, alignment: .center)
             return canvas
         }
         let first = min(max(0, state.firstRow), layout.maxFirstRow)
         for (i, row) in layout.rows.dropFirst(first).prefix(layout.visibleRows).enumerated() {
-            let rect = PixelRect(x: layout.area.x, y: layout.area.y + i * LyricsLayout.rowHeight, width: layout.area.width, height: LyricsLayout.rowHeight)
-            SystemText.draw(&canvas, row.text, in: rect, color: row.line == state.current ? style.current : style.normal, fontName: style.font, alignment: .center)
+            let rect = PixelRect(x: layout.area.x, y: layout.area.y + i * layout.rowHeight, width: layout.area.width, height: layout.rowHeight)
+            SystemText.draw(
+                &canvas, row.text, in: rect, color: row.line == state.current ? style.current : style.normal, fontName: style.font, size: size,
+                alignment: .center)
         }
         return canvas
     }

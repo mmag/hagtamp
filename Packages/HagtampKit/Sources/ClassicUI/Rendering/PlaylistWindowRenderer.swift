@@ -11,16 +11,14 @@ import SkinKit
 public enum PlaylistWindowRenderer {
     public static let baseWidth = 275
     public static let baseHeight = 116
-    public static let rowHeight = 13
-    static let fontSize: CGFloat = 9
 
     /// Area of the track list, in window coordinates.
     public static func listRect(width: Int, height: Int) -> PixelRect {
         PixelRect(x: 12, y: 20, width: width - 32, height: height - 58)
     }
 
-    public static func visibleRowCount(height: Int) -> Int {
-        max(0, (height - 58 - 6) / rowHeight)
+    public static func visibleRowCount(height: Int, textSize: TextSize = .normal) -> Int {
+        max(0, (height - 58 - 6) / textSize.rowHeight)
     }
 
     public static func render(_ skin: Skin, _ state: PlaylistWindowState) -> Bitmap {
@@ -172,8 +170,9 @@ public enum PlaylistWindowRenderer {
     private static func drawRows(_ canvas: inout Bitmap, _ skin: Skin, _ state: PlaylistWindowState, width: Int, height: Int) {
         let list = listRect(width: width, height: height)
         let style = skin.playlistStyle
-        let font = CTFontCreateWithName(style.font as CFString, fontSize, nil)
-        let visible = visibleRowCount(height: height)
+        let textSize = state.textSize, rowHeight = textSize.rowHeight
+        let font = CTFontCreateWithName(style.font as CFString, textSize.fontSize, nil)
+        let visible = visibleRowCount(height: height, textSize: textSize)
         let rows = state.rows.indices.dropFirst(state.firstVisibleRow).prefix(visible)
 
         for (line, index) in rows.enumerated() {
@@ -194,14 +193,14 @@ public enum PlaylistWindowRenderer {
                     NSAttributedString.Key(kCTFontAttributeName as String): font,
                     NSAttributedString.Key(kCTForegroundColorAttributeName as String): color.cgColor,
                 ]
-                let baseline = CGFloat(height - (list.y + 3 + line * rowHeight + 10))
+                let baseline = CGFloat(height - (list.y + 3 + line * rowHeight + textSize.scaled(10)))
 
                 let duration = CTLineCreateWithAttributedString(NSAttributedString(string: row.duration, attributes: attributes))
                 let durationWidth = CTLineGetTypographicBounds(duration, nil, nil, nil)
                 let durationX = CGFloat(list.maxX - 3) - ceil(durationWidth)
 
                 ctx.saveGState()
-                ctx.clip(to: CGRect(x: CGFloat(list.x), y: baseline - 4, width: durationX - CGFloat(list.x) - 2, height: CGFloat(rowHeight)))
+                ctx.clip(to: CGRect(x: CGFloat(list.x), y: baseline - CGFloat(textSize.scaled(4)), width: durationX - CGFloat(list.x) - 2, height: CGFloat(rowHeight)))
                 ctx.textPosition = CGPoint(x: CGFloat(list.x + 1), y: baseline)
                 CTLineDraw(CTLineCreateWithAttributedString(NSAttributedString(string: row.title, attributes: attributes)), ctx)
                 ctx.restoreGState()

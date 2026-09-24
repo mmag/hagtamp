@@ -39,6 +39,10 @@ final class PreferencesWindowController {
 final class PreferencesModel {
     let player: PlayerModel
     var resumesPosition: Bool { didSet { player.resumesPosition = resumesPosition } }
+    /// Percent; applied to the windows at once.
+    var textPercent: Int {
+        didSet { (NSApp.delegate as? AppDelegate)?.setTextScale(Double(textPercent) / 100) }
+    }
     let navidrome: NavidromeService
     let library: LocalLibraryService
     private(set) var libraryFolders: [URL] = []
@@ -59,6 +63,7 @@ final class PreferencesModel {
     init(player: PlayerModel, navidrome: NavidromeService, library: LocalLibraryService) {
         self.player = player
         resumesPosition = player.resumesPosition
+        textPercent = Int(((NSApp.delegate as? AppDelegate)?.textScale ?? 1.5) * 100)
         self.navidrome = navidrome
         self.library = library
         url = navidrome.server?.url.absoluteString ?? ""
@@ -143,7 +148,7 @@ final class PreferencesModel {
 }
 
 struct PreferencesView: View {
-    static let size = CGSize(width: 460, height: 730)
+    static let size = CGSize(width: 460, height: 800)
 
     @Bindable var model: PreferencesModel
 
@@ -151,6 +156,14 @@ struct PreferencesView: View {
         Form {
             Section("Playback") {
                 Toggle("Continue the track where it was when Hagtamp quit", isOn: $model.resumesPosition)
+            }
+            Section("Appearance") {
+                Picker("Text size", selection: $model.textPercent) {
+                    ForEach([100, 125, 150, 175, 200], id: \.self) { percent in
+                        Text(percent == 100 ? "100% (as in Winamp)" : "\(percent)%").tag(percent)
+                    }
+                }
+                Text("The playlist, library lists and lyrics.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Local library") {
                 if model.libraryFolders.isEmpty {

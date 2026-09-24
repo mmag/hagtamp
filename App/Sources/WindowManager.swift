@@ -22,6 +22,13 @@ final class WindowManager: NSObject {
     var timeMode = TimeDisplayMode.elapsed {
         didSet { saveLayout() }
     }
+    /// Text in the playlist, library lists and lyrics (Preferences; Winamp's is 1x).
+    var textSize = TextSize(scale: Storage.defaults.object(forKey: "textScale") as? Double ?? 1.5) {
+        didSet {
+            Storage.defaults.set(textSize.scale, forKey: "textScale")
+            render()
+        }
+    }
 
     private(set) lazy var main = MainWindowController(manager: self)
     private(set) lazy var equalizer = EqualizerWindowController(manager: self)

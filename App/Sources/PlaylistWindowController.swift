@@ -28,7 +28,8 @@ final class PlaylistWindowController: SkinWindowController {
     private var playlist: Playlist { model.playlist }
     private var width: Int { PlaylistWindowRenderer.baseWidth + widthSteps * 25 }
     private var height: Int { PlaylistWindowRenderer.baseHeight + heightSteps * 29 }
-    private var visibleRows: Int { PlaylistWindowRenderer.visibleRowCount(height: height) }
+    private var visibleRows: Int { PlaylistWindowRenderer.visibleRowCount(height: height, textSize: manager.textSize) }
+    private var rowHeight: Int { manager.textSize.rowHeight }
 
     override func regions() -> [ControlRegion] {
         PlaylistWindowLayout.regions(width: width, height: shade ? 14 : height, shade: shade)
@@ -51,6 +52,7 @@ final class PlaylistWindowController: SkinWindowController {
 
     private func state() -> PlaylistWindowState {
         var s = PlaylistWindowState()
+        s.textSize = manager.textSize
         s.focused = isFocused
         s.shade = shade
         s.pressed = pressed
@@ -114,7 +116,7 @@ final class PlaylistWindowController: SkinWindowController {
 
     private func row(at point: SkinPoint) -> Int? {
         guard point.y >= 23 else { return nil }
-        let row = firstVisibleRow + (point.y - 23) / PlaylistWindowRenderer.rowHeight
+        let row = firstVisibleRow + (point.y - 23) / rowHeight
         return playlist.entries.indices.contains(row) ? row : nil
     }
 
@@ -218,7 +220,7 @@ final class PlaylistWindowController: SkinWindowController {
         switch control {
         case .trackList:
             guard let start = dragStart else { return }
-            let rows = Int((Double(point.y - start.y) / Double(PlaylistWindowRenderer.rowHeight)).rounded(.down))
+            let rows = Int((Double(point.y - start.y) / Double(rowHeight)).rounded(.down))
             guard rows != start.moved else { return }
             var applied = 0
             model.editPlaylist { applied = $0.moveSelection(by: rows - start.moved) }
@@ -451,6 +453,6 @@ final class PlaylistWindowController: SkinWindowController {
     /// Files dropped on the list go where they were dropped.
     func insertionRow(at point: SkinPoint) -> Int {
         guard point.y >= 23 else { return firstVisibleRow }
-        return min(playlist.count, firstVisibleRow + (point.y - 23 + PlaylistWindowRenderer.rowHeight / 2) / PlaylistWindowRenderer.rowHeight)
+        return min(playlist.count, firstVisibleRow + (point.y - 23 + rowHeight / 2) / rowHeight)
     }
 }

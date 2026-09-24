@@ -94,6 +94,7 @@ public struct PlaylistRow: Sendable, Equatable {
 public struct PlaylistWindowState: Sendable {
     public var focused = false
     public var shade = false
+    public var textSize = TextSize.normal
     public var pressed: Control?
     /// Extra size in 25 px (width) and 29 px (height) steps.
     public var widthSteps = 0

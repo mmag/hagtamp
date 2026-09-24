@@ -40,11 +40,12 @@ public struct MediaLibraryLayout: Sendable {
     public let buttons: [MediaLibraryButton: PixelRect]
     public let status: PixelRect
 
-    public init(width: Int, height: Int, upperCount: Int, showsSetupButton: Bool) {
+    public init(width: Int, height: Int, upperCount: Int, showsSetupButton: Bool, textSize: TextSize = .normal) {
         let c = GenWindowRenderer.contentRect(width: width, height: height)
         content = c
         let listsBottom = c.maxY - 20
-        sidebar = PixelRect(x: c.x, y: c.y, width: 96, height: listsBottom - c.y)
+        // The sidebar grows with its text, up to a third of the window.
+        sidebar = PixelRect(x: c.x, y: c.y, width: min(textSize.scaled(96), c.width / 3), height: listsBottom - c.y)
         let x0 = sidebar.maxX + 3, rightWidth = c.maxX - x0
         let clear = PixelRect(x: c.maxX - 42, y: c.y, width: 42, height: 15)
         searchLabel = PixelRect(x: x0, y: c.y, width: 38, height: 15)
@@ -87,7 +88,7 @@ public enum MediaLibraryRenderer {
         var canvas = GenWindowRenderer.render(skin, frame)
         let layout = MediaLibraryLayout(
             width: frame.pixelWidth, height: frame.pixelHeight, upperCount: state.upper.count,
-            showsSetupButton: state.setupButton != nil)
+            showsSetupButton: state.setupButton != nil, textSize: state.sidebar.textSize)
         let font = skin.playlistStyle.font
 
         GenControls.drawList(&canvas, skin, colors, layout.sidebar, state.sidebar)

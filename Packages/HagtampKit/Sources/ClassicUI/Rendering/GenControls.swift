@@ -73,6 +73,7 @@ public struct ListViewModel: Sendable, Equatable {
     public var showsScrollbar = true
     /// Shown when there are no rows ("Loading…", errors).
     public var placeholder: String?
+    public var textSize = TextSize.normal
 
     public init(columns: [ListColumn], rows: [[String]] = []) {
         self.columns = columns
@@ -94,12 +95,13 @@ public enum GenControls {
         public let header: PixelRect?
         public let rows: PixelRect
         public let scrollbar: PixelRect
+        public let rowHeight: Int
 
-        public var visibleRows: Int { max(0, rows.height / GenControls.rowHeight) }
+        public var visibleRows: Int { max(0, rows.height / rowHeight) }
 
         public func row(atY y: Int, firstVisible: Int) -> Int? {
             guard y >= rows.y, y < rows.maxY else { return nil }
-            return firstVisible + (y - rows.y) / GenControls.rowHeight
+            return firstVisible + (y - rows.y) / rowHeight
         }
 
         public var scrollUp: PixelRect { PixelRect(x: scrollbar.x, y: scrollbar.y, width: scrollbarWidth, height: 14) }
@@ -122,8 +124,13 @@ public enum GenControls {
             return Int((position * Double(hidden)).rounded())
         }
 
-        /// Column x ranges within the row area.
-        public func columnRanges(_ columns: [ListColumn]) -> [Range<Int>] {
+        /// Column x ranges within the row area; fixed widths grow with the text.
+        public func columnRanges(_ columns: [ListColumn], textSize: TextSize = .normal) -> [Range<Int>] {
+            let columns = columns.map { column in
+                var column = column
+                column.width = column.width.map(textSize.scaled)
+                return column
+            }
             let fixed = columns.compactMap(\.width).reduce(0, +)
             let flexible = columns.filter { $0.width == nil }.count
             let share = flexible > 0 ? max(0, rows.width - fixed) / flexible : 0
@@ -136,20 +143,24 @@ public enum GenControls {
         }
     }
 
-    public static func listGeometry(_ frame: PixelRect, showsHeader: Bool, showsScrollbar: Bool = true) -> ListGeometry {
+    public static func listGeometry(
+        _ frame: PixelRect, showsHeader: Bool, showsScrollbar: Bool = true, textSize: TextSize = .normal
+    ) -> ListGeometry {
         let bar = showsScrollbar ? scrollbarWidth : 0
+        let headerHeight = textSize.headerHeight
         let header = showsHeader ? PixelRect(x: frame.x, y: frame.y, width: frame.width - bar, height: headerHeight) : nil
         let top = frame.y + (showsHeader ? headerHeight : 0)
         let rows = PixelRect(x: frame.x, y: top, width: frame.width - bar, height: frame.maxY - top)
         let scrollbar = PixelRect(x: frame.maxX - bar, y: frame.y, width: bar, height: showsScrollbar ? frame.height : 0)
-        return ListGeometry(frame: frame, header: header, rows: rows, scrollbar: scrollbar)
+        return ListGeometry(frame: frame, header: header, rows: rows, scrollbar: scrollbar, rowHeight: textSize.rowHeight)
     }
 
     public static func drawList(_ canvas: inout Bitmap, _ skin: Skin, _ colors: GenExColors, _ frame: PixelRect, _ model: ListViewModel) {
-        let geometry = listGeometry(frame, showsHeader: model.showsHeader, showsScrollbar: model.showsScrollbar)
+        let geometry = listGeometry(frame, showsHeader: model.showsHeader, showsScrollbar: model.showsScrollbar, textSize: model.textSize)
         let font = skin.playlistStyle.font
+        let size = model.textSize.fontSize, rowHeight = geometry.rowHeight
         canvas.fill(geometry.rows, with: colors.itemBackground)
-        let ranges = geometry.columnRanges(model.columns)
+        let ranges = geometry.columnRanges(model.columns, textSize: model.textSize)
 
         if let header = geometry.header {
             canvas.fill(header, with: colors.listHeaderBackground)
@@ -161,7 +172,7 @@ public enum GenControls {
                 canvas.fill(PixelRect(x: cell.x, y: cell.maxY - 1, width: cell.width, height: 1), with: colors.listHeaderFrameBottomRight)
                 canvas.fill(PixelRect(x: cell.maxX - 1, y: cell.y, width: 1, height: cell.height), with: colors.listHeaderFrameBottomRight)
                 let text = PixelRect(x: cell.x + 3, y: cell.y, width: cell.width - 6, height: cell.height)
-                SystemText.draw(&canvas, column.title, in: text, color: colors.listHeaderText, fontName: font, alignment: column.alignRight ? .right : .left)
+                SystemText.draw(&canvas, column.title, in: text, color: colors.listHeaderText, fontName: font, size: size, alignment: column.alignRight ? .right : .left)
             }
         }
 
@@ -175,12 +186,12 @@ public enum GenControls {
             }
             for (i, range) in ranges.enumerated() where i < model.rows[index].count {
                 let cell = PixelRect(x: range.lowerBound + 3, y: rowRect.y, width: range.count - 6, height: rowHeight)
-                SystemText.draw(&canvas, model.rows[index][i], in: cell, color: color, fontName: font, alignment: model.columns[i].alignRight ? .right : .left)
+                SystemText.draw(&canvas, model.rows[index][i], in: cell, color: color, fontName: font, size: size, alignment: model.columns[i].alignRight ? .right : .left)
             }
         }
         if model.rows.isEmpty, let placeholder = model.placeholder {
             let rect = PixelRect(x: geometry.rows.x + 4, y: geometry.rows.y + 2, width: geometry.rows.width - 8, height: rowHeight)
-            SystemText.draw(&canvas, placeholder, in: rect, color: colors.itemForeground, fontName: font)
+            SystemText.draw(&canvas, placeholder, in: rect, color: colors.itemForeground, fontName: font, size: size)
         }
         if model.showsScrollbar {
             drawScrollbar(&canvas, skin, colors, geometry, rowCount: model.rows.count, firstVisible: model.firstVisibleRow)

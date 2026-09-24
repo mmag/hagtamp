@@ -60,7 +60,8 @@ final class LibraryWindowController: SkinWindowController {
         }
     }
     private var layout: MediaLibraryLayout {
-        MediaLibraryLayout(width: width, height: height, upperCount: upperCount, showsSetupButton: source.revision == nil)
+        MediaLibraryLayout(
+            width: width, height: height, upperCount: upperCount, showsSetupButton: source.revision == nil, textSize: manager.textSize)
     }
 
     override func regions() -> [ControlRegion] {
@@ -96,6 +97,7 @@ final class LibraryWindowController: SkinWindowController {
         var sidebar = ListViewModel(columns: [ListColumn("")], rows: source.views.map { [$0.title] })
         sidebar.showsHeader = false
         sidebar.showsScrollbar = false
+        sidebar.textSize = manager.textSize
         sidebar.selection = [viewIndex]
         sidebar.focused = focus == .sidebar && isFocused
 
@@ -167,6 +169,7 @@ final class LibraryWindowController: SkinWindowController {
         model.firstVisibleRow = scroll[list] ?? 0
         model.focused = isFocused && (list == Self.tracksList ? focus == .tracks : focus == .upper(list))
         model.placeholder = loading[list]
+        model.textSize = manager.textSize
         return model
     }
 
@@ -184,7 +187,7 @@ final class LibraryWindowController: SkinWindowController {
     }
 
     private func geometry(_ list: Int) -> GenControls.ListGeometry {
-        GenControls.listGeometry(listRect(list), showsHeader: true)
+        GenControls.listGeometry(listRect(list), showsHeader: true, textSize: manager.textSize)
     }
 
     private func changed() {
@@ -370,7 +373,7 @@ final class LibraryWindowController: SkinWindowController {
         }
         if layout.sidebar.contains(x: point.x, y: point.y) {
             focus = .sidebar
-            let row = (point.y - layout.sidebar.y) / GenControls.rowHeight
+            let row = (point.y - layout.sidebar.y) / manager.textSize.rowHeight
             // Choosing the current view again leaves search results, or reloads it.
             if source.views.indices.contains(row), row != viewIndex || searchResults != nil || source.views[row].reloadsWhenChosenAgain {
                 viewIndex = row
