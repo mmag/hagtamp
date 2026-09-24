@@ -27,11 +27,27 @@ enum SelfTest {
 
         Task { @MainActor in
             checkPresetMenu(manager)
+            checkRaising(manager)
             await audioSteps(manager, snap: snap)
             await playlistSteps(manager, snap: snap)
             uiSteps(manager, snap: snap)
             NSApp.terminate(nil)
         }
+    }
+
+    /// A foreign window covering the equalizer must go below it once the main window is clicked.
+    private static func checkRaising(_ manager: WindowManager) {
+        let foreign = NSWindow(contentRect: manager.equalizer.window.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        foreign.isReleasedWhenClosed = false
+        foreign.orderFront(nil)
+        func rank(_ w: NSWindow) -> Int { NSApp.orderedWindows.firstIndex { $0 === w } ?? -1 }
+        let before = rank(manager.equalizer.window) < rank(foreign)
+        manager.main.mouseDown(at: SkinPoint(x: 100, y: 5), event: event(.leftMouseDown, manager.main))
+        manager.main.mouseUp(at: SkinPoint(x: 100, y: 5), event: event(.leftMouseUp, manager.main))
+        let after = rank(manager.equalizer.window) < rank(foreign)
+        let mainOnTop = rank(manager.main.window) == 0
+        print("selftest: raise: eq above foreign before=\(before) after=\(after), main on top=\(mainOnTop)")
+        foreign.close()
     }
 
     /// Picks "Rock" from the PRESETS menu the way AppKit would.

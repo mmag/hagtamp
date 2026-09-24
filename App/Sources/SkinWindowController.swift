@@ -84,6 +84,7 @@ class SkinWindowController: NSObject, SkinViewDelegate {
 
     func mouseDown(at point: SkinPoint, event: NSEvent) {
         guard isInsideShape(point) else { return }
+        manager.raiseAll(keepingOnTop: id)
         if interceptPress(at: point, event: event) { return }
 
         guard let region = regions().hit(x: point.x, y: point.y) else {

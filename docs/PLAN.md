@@ -25,7 +25,7 @@ Goal: a macOS player that looks and behaves like Winamp 2.x with classic skins, 
 
 ## TODO / known issues
 
-- [ ] Dragging the main window moves the docked equalizer/playlist along, but they can end up behind other apps' windows (only the clicked window is raised). Raise the whole docked group (Winamp raises all its windows) when a drag starts or a window is clicked.
+- [x] Dragging the main window moves the docked equalizer/playlist along, but they could end up behind other apps' windows (only the clicked window was raised). Fixed: a click on any window raises all of them (`WindowManager.raiseAll`).
 
 ## Licensing notes
 

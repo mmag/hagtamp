@@ -263,6 +263,19 @@ final class WindowManager: NSObject {
     }
     @objc func togglePlaylist() { setVisible(.playlist, !isVisible(.playlist)) }
 
+    /// Brings all visible windows above other apps' windows, keeping their
+    /// order among themselves, with `id` on top. Winamp raises all its windows
+    /// together; macOS only raises the window that was clicked.
+    func raiseAll(keepingOnTop id: WindowID) {
+        let top = controller(id).window
+        let ours = Set(controllers.filter { visible.contains($0.id) }.map { ObjectIdentifier($0.window) })
+        let frontToBack = NSApp.orderedWindows.filter { ours.contains(ObjectIdentifier($0)) }
+        for window in frontToBack.reversed() where window !== top {
+            window.orderFront(nil)
+        }
+        top.orderFront(nil)
+    }
+
     // MARK: - Moving windows
 
     func beginMove(_ id: WindowID, from mouse: NSPoint = NSEvent.mouseLocation) {
