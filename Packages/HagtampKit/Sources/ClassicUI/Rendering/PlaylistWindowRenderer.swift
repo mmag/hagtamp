@@ -24,6 +24,8 @@ public enum PlaylistWindowRenderer {
     }
 
     public static func render(_ skin: Skin, _ state: PlaylistWindowState) -> Bitmap {
+        if state.shade { return renderShade(skin, state) }
+
         let width = state.pixelWidth, height = state.pixelHeight
         var canvas = Bitmap(width: width, height: height, fill: skin.playlistStyle.normalBackground)
 
@@ -31,6 +33,9 @@ public enum PlaylistWindowRenderer {
         drawSides(&canvas, skin, state, width: width, height: height)
         drawBottom(&canvas, skin, state, width: width, height: height)
         drawRows(&canvas, skin, state, width: width, height: height)
+        if let menu = state.openMenu {
+            drawMenu(&canvas, skin, menu, hovered: state.hoveredMenuItem, width: width, height: height)
+        }
         return canvas
     }
 
@@ -57,6 +62,8 @@ public enum PlaylistWindowRenderer {
         }
         canvas.tile(skin, tile, over: PixelRect(x: x, y: 0, width: fillWidth, height: 20))
         canvas.draw(skin, active ? Sprite.PlEdit.topRightActive : Sprite.PlEdit.topRight, x: width - 25, y: 0)
+        if state.pressed == .shade { canvas.draw(skin, Sprite.PlEdit.shadePressed, x: width - 21, y: 3) }
+        if state.pressed == .close { canvas.draw(skin, Sprite.PlEdit.closePressed, x: width - 11, y: 3) }
     }
 
     private static func drawSides(_ canvas: inout Bitmap, _ skin: Skin, _ state: PlaylistWindowState, width: Int, height: Int) {
@@ -64,10 +71,84 @@ public enum PlaylistWindowRenderer {
         canvas.tile(skin, Sprite.PlEdit.leftTile, over: PixelRect(x: 0, y: 20, width: 12, height: middle))
         canvas.tile(skin, Sprite.PlEdit.rightTile, over: PixelRect(x: width - 20, y: 20, width: 20, height: middle))
 
-        let travel = middle - 18
-        let maxFirstRow = max(0, state.rows.count - visibleRowCount(height: height))
-        let scroll = maxFirstRow == 0 ? 0 : Double(min(state.firstVisibleRow, maxFirstRow)) / Double(maxFirstRow)
-        canvas.draw(skin, Sprite.PlEdit.scrollThumb, x: width - 15, y: 20 + Int(Double(travel) * scroll))
+        let thumb = state.pressed == .scrollBar ? Sprite.PlEdit.scrollThumbPressed : Sprite.PlEdit.scrollThumb
+        let y = PlaylistWindowLayout.scrollBar(height: height).thumbPosition(scrollPosition(state, height: height))
+        canvas.draw(skin, thumb, x: width - 15, y: y)
+    }
+
+    /// Scroll position 0...1 of the track list.
+    public static func scrollPosition(_ state: PlaylistWindowState, height: Int) -> Double {
+        let maxFirstRow = maxFirstVisibleRow(rowCount: state.rows.count, height: height)
+        return maxFirstRow == 0 ? 0 : Double(min(state.firstVisibleRow, maxFirstRow)) / Double(maxFirstRow)
+    }
+
+    public static func maxFirstVisibleRow(rowCount: Int, height: Int) -> Int {
+        max(0, rowCount - visibleRowCount(height: height))
+    }
+
+    /// The bar and the items of a popped-up bottom menu, stacked upwards from its button.
+    private static func drawMenu(_ canvas: inout Bitmap, _ skin: Skin, _ menu: PlaylistMenu, hovered: Int?, width: Int, height: Int) {
+        let bar: Sprite
+        switch menu {
+        case .add: bar = Sprite.PlEdit.addMenuBar
+        case .remove: bar = Sprite.PlEdit.removeMenuBar
+        case .select: bar = Sprite.PlEdit.selectMenuBar
+        case .misc: bar = Sprite.PlEdit.miscMenuBar
+        case .list: bar = Sprite.PlEdit.listMenuBar
+        }
+        let x = PlaylistWindowLayout.menuX(menu, width: width)
+        canvas.draw(skin, bar, x: x - 3, y: height - 12 - bar.height)
+        for (index, item) in menu.items.enumerated() {
+            let rect = PlaylistWindowLayout.menuItemRect(menu, item: index, width: width, height: height)
+            let (normal, hover) = sprites(for: item)
+            canvas.draw(skin, index == hovered ? hover : normal, x: rect.x, y: rect.y)
+        }
+    }
+
+    private static func sprites(for item: PlaylistMenuItem) -> (Sprite, Sprite) {
+        typealias P = Sprite.PlEdit
+        switch item {
+        case .addURL: return (P.addURL, P.addURLHover)
+        case .addDirectory: return (P.addDir, P.addDirHover)
+        case .addFile: return (P.addFile, P.addFileHover)
+        case .removeMisc: return (P.removeMisc, P.removeMiscHover)
+        case .removeAll: return (P.removeAll, P.removeAllHover)
+        case .crop: return (P.crop, P.cropHover)
+        case .removeSelected: return (P.removeSelected, P.removeSelectedHover)
+        case .invertSelection: return (P.invertSelection, P.invertSelectionHover)
+        case .selectNone: return (P.selectNone, P.selectNoneHover)
+        case .selectAll: return (P.selectAll, P.selectAllHover)
+        case .sortList: return (P.sortList, P.sortListHover)
+        case .fileInfo: return (P.fileInfo, P.fileInfoHover)
+        case .miscOptions: return (P.miscOptions, P.miscOptionsHover)
+        case .newList: return (P.newList, P.newListHover)
+        case .saveList: return (P.saveList, P.saveListHover)
+        case .loadList: return (P.loadList, P.loadListHover)
+        }
+    }
+
+    // MARK: - Shade mode
+
+    /// Shade mode: a 14 px strip with the current title and its length.
+    private static func renderShade(_ skin: Skin, _ state: PlaylistWindowState) -> Bitmap {
+        let width = state.pixelWidth
+        var canvas = Bitmap(width: width, height: 14, fill: .black)
+        canvas.tile(skin, Sprite.PlEdit.shadeBackground, over: PixelRect(x: 0, y: 0, width: width, height: 14))
+        canvas.draw(skin, Sprite.PlEdit.shadeLeft, x: 0, y: 0)
+        canvas.draw(skin, state.focused ? Sprite.PlEdit.shadeRightActive : Sprite.PlEdit.shadeRight, x: width - 50, y: 0)
+
+        let maxCharacters = (205 + (width - baseWidth)) / SkinFont.glyphWidth
+        var title = state.currentTitle ?? "[No file]"
+        if title.count > maxCharacters { title = title.prefix(maxCharacters - 1) + "\u{2026}" }
+        canvas.drawText(skin, title, x: 5, y: 4)
+        if state.currentTitle != nil {
+            let duration = state.currentDuration
+            canvas.drawText(skin, duration, x: width - 30 - duration.count * SkinFont.glyphWidth, y: 4)
+        }
+
+        if state.pressed == .shade { canvas.draw(skin, Sprite.PlEdit.unshadePressed, x: width - 21, y: 3) }
+        if state.pressed == .close { canvas.draw(skin, Sprite.PlEdit.closePressed, x: width - 11, y: 3) }
+        return canvas
     }
 
     private static func drawBottom(_ canvas: inout Bitmap, _ skin: Skin, _ state: PlaylistWindowState, width: Int, height: Int) {
@@ -85,15 +166,7 @@ public enum PlaylistWindowRenderer {
 
         // Mini time: blank background first, then the characters.
         let miniX = right + 66, miniY = top + 23
-        let slots = [1, 7, 12, 20, 25]
-        for slot in slots { canvas.drawText(skin, " ", x: miniX + slot, y: miniY) }
-        if let time = state.miniTime {
-            let digits = time.digits.map(String.init)
-            let characters = [time.mode == .remaining ? "-" : " "] + digits
-            for (character, slot) in zip(characters, slots) {
-                canvas.drawText(skin, character, x: miniX + slot, y: miniY)
-            }
-        }
+        MainWindowRenderer.drawMiniTime(&canvas, skin, state.miniTime, x: miniX, y: miniY)
     }
 
     private static func drawRows(_ canvas: inout Bitmap, _ skin: Skin, _ state: PlaylistWindowState, width: Int, height: Int) {

@@ -1,44 +1,77 @@
 import SkinKit
 
-/// Draws the equalizer window (275x116) in normal (non-shade) mode.
+/// Draws the equalizer window: 275x116, or 275x14 in shade mode.
 ///
 /// Layout from Webamp's equalizer-window.css (MIT, see THIRD_PARTY_NOTICES.md).
 public enum EqualizerWindowRenderer {
     public static let width = 275
     public static let height = 116
+    public static let shadeHeight = 14
 
     public static let preampX = 21
     public static let bandX = (0..<10).map { 78 + $0 * 18 }
     public static let sliderY = 38
-    /// Travel of a slider thumb (62 px track, 11 px thumb).
-    static let thumbTravel = 51
 
     public static func render(_ skin: Skin, _ state: EqualizerWindowState) -> Bitmap {
+        if state.shade { return renderShade(skin, state) }
+
         var canvas = Bitmap(width: width, height: height, fill: .black)
         canvas.draw(skin, Sprite.EqMain.background, x: 0, y: 0)
         canvas.draw(skin, state.focused ? Sprite.EqMain.titleBarActive : Sprite.EqMain.titleBar, x: 0, y: 0)
+        let p = state.pressed
+        if p == .shade {
+            // Skins without EQ_EX.BMP show their own title bar there instead of the base skin's sprite.
+            let sprite = skin.inheritedSheets.contains(.eqEx) ? Sprite.EqMain.maximizePressedFallback : Sprite.EqEx.maximizePressed
+            canvas.draw(skin, sprite, x: 254, y: 3)
+        }
+        if p == .close { canvas.draw(skin, Sprite.EqMain.closePressed, x: 264, y: 3) }
 
-        canvas.draw(skin, state.enabled ? Sprite.EqMain.onSelected : Sprite.EqMain.on, x: 14, y: 18)
-        canvas.draw(skin, state.auto ? Sprite.EqMain.autoSelected : Sprite.EqMain.auto, x: 40, y: 18)
+        let on: Sprite =
+            state.enabled
+            ? (p == .equalizerOn ? Sprite.EqMain.onSelectedPressed : Sprite.EqMain.onSelected)
+            : (p == .equalizerOn ? Sprite.EqMain.onPressed : Sprite.EqMain.on)
+        canvas.draw(skin, on, x: 14, y: 18)
+        let auto: Sprite =
+            state.auto
+            ? (p == .equalizerAuto ? Sprite.EqMain.autoSelectedPressed : Sprite.EqMain.autoSelected)
+            : (p == .equalizerAuto ? Sprite.EqMain.autoPressed : Sprite.EqMain.auto)
+        canvas.draw(skin, auto, x: 40, y: 18)
         drawGraph(&canvas, skin, state)
-        canvas.draw(skin, Sprite.EqMain.presets, x: 217, y: 18)
+        canvas.draw(skin, p == .presets ? Sprite.EqMain.presetsPressed : Sprite.EqMain.presets, x: 217, y: 18)
 
-        drawSlider(&canvas, skin, value: state.preamp, x: preampX)
-        for (value, x) in zip(state.bands, bandX) {
-            drawSlider(&canvas, skin, value: value, x: x)
+        drawSlider(&canvas, skin, value: state.preamp, x: preampX, pressed: p == .preamp)
+        for (i, (value, x)) in zip(state.bands, bandX).enumerated() {
+            drawSlider(&canvas, skin, value: value, x: x, pressed: p == .band(i))
         }
         return canvas
     }
 
     /// A vertical slider: one of 28 background frames (two rows of 14) plus the thumb.
-    private static func drawSlider(_ canvas: inout Bitmap, _ skin: Skin, value: Double, x: Int) {
+    private static func drawSlider(_ canvas: inout Bitmap, _ skin: Skin, value: Double, x: Int, pressed: Bool) {
         let value = min(1, max(0, value))
         let frame = frameIndex(value, frames: 28)
         let strip = Sprite.EqMain.sliderBackground.rect
         let background = Sprite(.eqmain, strip.x + (frame % 14) * 15, strip.y + (frame / 14) * 65, 14, 63)
         canvas.draw(skin, background, x: x, y: sliderY)
-        let thumbY = sliderY + Int((Double(thumbTravel) * (1 - value)).rounded(.down))
-        canvas.draw(skin, Sprite.EqMain.sliderThumb, x: x + 1, y: thumbY)
+        let thumb = pressed ? Sprite.EqMain.sliderThumbPressed : Sprite.EqMain.sliderThumb
+        canvas.draw(skin, thumb, x: x + 1, y: EqualizerWindowLayout.band.thumbPosition(value))
+    }
+
+    private static func renderShade(_ skin: Skin, _ state: EqualizerWindowState) -> Bitmap {
+        var canvas = Bitmap(width: width, height: shadeHeight, fill: .black)
+        canvas.draw(skin, state.focused ? Sprite.EqEx.shadeActive : Sprite.EqEx.shadeInactive, x: 0, y: 0)
+        if state.pressed == .shade { canvas.draw(skin, Sprite.EqEx.minimizePressed, x: 254, y: 3) }
+        if state.pressed == .close { canvas.draw(skin, Sprite.EqEx.shadeClosePressed, x: 264, y: 3) }
+
+        // The thumbs change shape with the third of the range they are in.
+        func third(_ v: Double) -> Int { v < 1.0 / 3 ? 0 : v < 2.0 / 3 ? 1 : 2 }
+        let volume = min(1, max(0, state.volume))
+        let volumeThumbs = [Sprite.EqEx.shadeVolumeThumbLeft, Sprite.EqEx.shadeVolumeThumbCenter, Sprite.EqEx.shadeVolumeThumbRight]
+        canvas.draw(skin, volumeThumbs[third(volume)], x: EqualizerWindowLayout.shadeVolume.thumbPosition(volume), y: 4)
+        let balance = (min(1, max(-1, state.balance)) + 1) / 2
+        let balanceThumbs = [Sprite.EqEx.shadeBalanceThumbLeft, Sprite.EqEx.shadeBalanceThumbCenter, Sprite.EqEx.shadeBalanceThumbRight]
+        canvas.draw(skin, balanceThumbs[third(balance)], x: EqualizerWindowLayout.shadeBalance.thumbPosition(balance), y: 4)
+        return canvas
     }
 
     static let graphOrigin = (x: 86, y: 17)

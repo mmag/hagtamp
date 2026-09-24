@@ -1,36 +1,20 @@
 import AppKit
 import SkinKit
-import SkinRenderer
 import UniformTypeIdentifiers
 
-/// Stage 1 shell: shows the three classic windows rendered from a skin in a
-/// fixed demo state. Player state and real window behaviour come next.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let lastSkinKey = "lastSkinPath"
 
-    private var skin = Skin.base
-    private var doubleSize = false
-
-    private let mainWindow = SkinWindow()
-    private let equalizerWindow = SkinWindow()
-    private let playlistWindow = SkinWindow()
-    private var windows: [SkinWindow] { [mainWindow, equalizerWindow, playlistWindow] }
+    private let model = PlayerModel()
+    private lazy var windows = WindowManager(model: model, skin: .base)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
-
-        for window in windows {
-            window.onFocusChange = { [weak self] in self?.render() }
-            window.skinView.onFileDrop = { [weak self] url in self?.loadSkin(from: url) }
-        }
         if let path = UserDefaults.standard.string(forKey: Self.lastSkinKey) {
             loadSkin(from: URL(fileURLWithPath: path), remember: false)
         }
-        render()
-        layOutWindows()
-        windows.reversed().forEach { $0.orderFront(nil) }
-        mainWindow.makeKeyAndOrderFront(nil)
+        windows.start()
         NSApp.activate()
     }
 
@@ -42,12 +26,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Skins
 
-    private func loadSkin(from url: URL, remember: Bool = true) {
+    func loadSkin(from url: URL, remember: Bool = true) {
         do {
-            skin = try Skin.load(contentsOf: url)
+            windows.setSkin(try Skin.load(contentsOf: url))
             if remember { UserDefaults.standard.set(url.path, forKey: Self.lastSkinKey) }
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
-            render()
         } catch {
             let alert = NSAlert()
             alert.messageText = "Can't load skin “\(url.lastPathComponent)”"
@@ -56,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func openSkin(_ sender: Any?) {
+    @objc func openSkin(_ sender: Any?) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "wsz") ?? .zip, .zip]
         panel.canChooseDirectories = true
@@ -65,59 +48,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         loadSkin(from: url)
     }
 
-    @objc private func useBaseSkin(_ sender: Any?) {
-        skin = .base
+    @objc func useBaseSkin(_ sender: Any?) {
+        windows.setSkin(.base)
         UserDefaults.standard.removeObject(forKey: Self.lastSkinKey)
-        render()
     }
 
-    @objc private func toggleDoubleSize(_ sender: Any?) {
-        doubleSize.toggle()
-        render()
-        layOutWindows()
-    }
-
-    // MARK: - Rendering
-
-    private func render() {
-        let scale = doubleSize ? 2 : 1
-
-        var main = ReferenceScene.mainState
-        main.focused = mainWindow.isKeyWindow
-        main.doubleSize = doubleSize
-        var mainBitmap = MainWindowRenderer.render(skin, main)
-        if let region = skin.regions.main {
-            mainBitmap.apply(mask: SkinRegions.mask(region, width: mainBitmap.width, height: mainBitmap.height))
-        }
-        mainWindow.show(mainBitmap, scale: scale)
-
-        var equalizer = ReferenceScene.equalizerState
-        equalizer.focused = equalizerWindow.isKeyWindow
-        var equalizerBitmap = EqualizerWindowRenderer.render(skin, equalizer)
-        if let region = skin.regions.equalizer {
-            equalizerBitmap.apply(mask: SkinRegions.mask(region, width: equalizerBitmap.width, height: equalizerBitmap.height))
-        }
-        equalizerWindow.show(equalizerBitmap, scale: scale)
-
-        var playlist = ReferenceScene.playlistState
-        playlist.focused = playlistWindow.isKeyWindow
-        playlistWindow.show(PlaylistWindowRenderer.render(skin, playlist), scale: scale)
-    }
-
-    private var placedOnScreen = false
-
-    /// Stacks the windows like Winamp's default layout, keeping the main window in place.
-    private func layOutWindows() {
-        if !placedOnScreen, let screen = NSScreen.main {
-            let visible = screen.visibleFrame
-            mainWindow.setFrameTopLeftPoint(NSPoint(x: (visible.minX + 80).rounded(), y: (visible.maxY - 80).rounded()))
-            placedOnScreen = true
-        }
-        equalizerWindow.setFrameTopLeftPoint(NSPoint(x: mainWindow.frame.minX, y: mainWindow.frame.minY))
-        playlistWindow.setFrameTopLeftPoint(NSPoint(x: mainWindow.frame.minX, y: equalizerWindow.frame.minY))
-    }
-
-    // MARK: - Menu
+    // MARK: - Menu bar
 
     private func makeMainMenu() -> NSMenu {
         let menu = NSMenu()
@@ -136,7 +72,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(submenu: fileMenu, title: "File")
 
         let viewMenu = NSMenu(title: "View")
-        viewMenu.addItem(withTitle: "Double Size", action: #selector(toggleDoubleSize(_:)), keyEquivalent: "d")
+        viewMenu.addItem(target: windows, "Playlist Editor", #selector(WindowManager.togglePlaylist), key: "e", modifiers: .option)
+        viewMenu.addItem(target: windows, "Equalizer", #selector(WindowManager.toggleEqualizer), key: "g", modifiers: .option)
+        viewMenu.addItem(.separator())
+        viewMenu.addItem(target: windows, "Double Size", #selector(WindowManager.toggleDoubleSize), key: "d", modifiers: .command)
+        viewMenu.addItem(target: windows, "Always On Top", #selector(WindowManager.toggleAlwaysOnTop), key: "a", modifiers: .control)
         menu.addItem(submenu: viewMenu, title: "View")
 
         return menu
@@ -147,6 +87,13 @@ private extension NSMenu {
     func addItem(submenu: NSMenu, title: String) {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.submenu = submenu
+        addItem(item)
+    }
+
+    func addItem(target: AnyObject, _ title: String, _ action: Selector, key: String, modifiers: NSEvent.ModifierFlags) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.keyEquivalentModifierMask = modifiers
+        item.target = target
         addItem(item)
     }
 }

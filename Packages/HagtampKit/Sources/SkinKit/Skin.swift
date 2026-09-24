@@ -11,6 +11,8 @@ public struct Skin: Sendable {
     public var visColors: [PixelColor]
     public var playlistStyle: PlaylistStyle
     public var regions: SkinRegions
+    /// Cursors the skin provides; others show the system arrow (never inherited).
+    public var cursors: [SkinCursorName: SkinCursor]
     /// Sheets the skin lacks, taken from the base skin instead.
     public var inheritedSheets: Set<SkinSheet>
     /// Problems found while loading; the skin is still usable.
@@ -72,6 +74,16 @@ public struct Skin: Sendable {
         visColors = archive.text("VISCOLOR").map(VisColors.parse) ?? VisColors.default
         playlistStyle = archive.text("PLEDIT").map(PlaylistStyle.parse) ?? .default
         regions = archive.text("REGION").map(SkinRegions.parse) ?? SkinRegions()
+        var cursors: [SkinCursorName: SkinCursor] = [:]
+        for name in SkinCursorName.allCases {
+            guard let entry = archive.file(name.rawValue, extensions: ["cur", "ani"]) else { continue }
+            if let cursor = CursorDecoder.decode(entry.data) {
+                cursors[name] = cursor
+            } else {
+                warnings.append("\(entry.path): unreadable cursor")
+            }
+        }
+        self.cursors = cursors
         self.warnings = warnings
     }
 

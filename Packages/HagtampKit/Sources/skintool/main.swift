@@ -1,6 +1,6 @@
 import Foundation
 import SkinKit
-import SkinRenderer
+import ClassicUI
 
 /// Developer tool for skin loading and rendering.
 ///

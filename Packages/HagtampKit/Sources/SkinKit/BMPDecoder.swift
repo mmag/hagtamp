@@ -223,3 +223,60 @@ enum BMPDecoder {
         func u32(_ at: Int) -> UInt32 { UInt32(u16(at)) | UInt32(u16(at + 2)) << 16 }
     }
 }
+
+extension BMPDecoder {
+    /// Decodes the image of an icon/cursor resource: a headerless DIB whose
+    /// height covers the colour (XOR) bitmap plus a 1-bit AND mask.
+    /// Transparency comes from 32-bit alpha when present, else from the mask.
+    static func decodeIconDIB(_ dib: Data) throws -> Bitmap {
+        let bytes = [UInt8](dib)
+        func u16(_ at: Int) -> Int { at + 1 < bytes.count ? Int(bytes[at]) | Int(bytes[at + 1]) << 8 : 0 }
+        func u32(_ at: Int) -> Int { u16(at) | u16(at + 2) << 16 }
+        let headerSize = u32(0)
+        guard headerSize >= 40, bytes.count > headerSize else { throw Failure.unsupported("icon header \(headerSize)") }
+        let width = u32(4), height = u32(8) / 2, bpp = u16(14), colorsUsed = u32(32)
+        guard width > 0, height > 0, width <= 256, height <= 256 else { throw Failure.unsupported("icon \(width)x\(height)") }
+
+        // Re-wrap as a BMP file with the real height; a zero data offset selects the packed layout.
+        var header = bytes
+        let h = UInt32(height)
+        header.replaceSubrange(8..<12, with: [UInt8(h & 0xFF), UInt8(h >> 8 & 0xFF), 0, 0])
+        var file: [UInt8] = Array("BM".utf8)
+        let total = UInt32(14 + header.count)
+        file += [UInt8(total & 0xFF), UInt8(total >> 8 & 0xFF), UInt8(total >> 16 & 0xFF), UInt8(total >> 24)]
+        file += [0, 0, 0, 0, 0, 0, 0, 0]
+        var bitmap = try decode(Data(file + header))
+
+        let paletteCount = bpp <= 8 ? (colorsUsed > 0 ? colorsUsed : 1 << bpp) : 0
+        let xorStart = headerSize + paletteCount * 4
+        let xorStride = (width * bpp + 31) / 32 * 4
+        let andStart = xorStart + xorStride * height
+        let andStride = (width + 31) / 32 * 4
+
+        var hasAlpha = false
+        if bpp == 32 {
+            hasAlpha = (0..<width * height).contains { i in
+                let at = xorStart + (i / width) * xorStride + (i % width) * 4 + 3
+                return at < bytes.count && bytes[at] != 0
+            }
+        }
+        for y in 0..<height {
+            let row = height - 1 - y  // bottom-up
+            for x in 0..<width {
+                var color = bitmap[x, y]
+                if hasAlpha {
+                    let alpha = UInt32(bytes[xorStart + row * xorStride + x * 4 + 3])
+                    func premultiply(_ c: UInt8) -> UInt32 { (UInt32(c) * alpha + 127) / 255 }
+                    color = PixelColor(argb: alpha << 24 | premultiply(color.red) << 16 | premultiply(color.green) << 8 | premultiply(color.blue))
+                } else {
+                    let at = andStart + row * andStride + x / 8
+                    let transparent = at < bytes.count && bytes[at] & (0x80 >> UInt8(x % 8)) != 0
+                    // Masked pixels with a non-black colour invert the screen on Windows; show them as drawn.
+                    if transparent && color.argb & 0xFF_FFFF == 0 { color = .clear }
+                }
+                bitmap[x, y] = color
+            }
+        }
+        return bitmap
+    }
+}

@@ -10,10 +10,13 @@ final class SkinWindow: NSWindow {
         skinView = SkinView(frame: .zero)
         super.init(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
         contentView = skinView
+        initialFirstResponder = skinView
+        makeFirstResponder(skinView)  // transport keys go to the skin view
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
         isReleasedWhenClosed = false
+        acceptsMouseMovedEvents = true
         collectionBehavior = [.managed, .participatesInCycle]
     }
 
@@ -28,14 +31,5 @@ final class SkinWindow: NSWindow {
     override func resignKey() {
         super.resignKey()
         onFocusChange?()
-    }
-
-    /// Shows `bitmap`, resizing the window around its top-left corner.
-    func show(_ bitmap: Bitmap, scale: Int) {
-        skinView.show(bitmap)
-        let size = CGSize(width: bitmap.width * scale, height: bitmap.height * scale)
-        guard frame.size != size else { return }
-        let top = frame.maxY
-        setFrame(NSRect(x: frame.minX, y: top - size.height, width: size.width, height: size.height), display: true)
     }
 }

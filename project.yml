@@ -25,7 +25,7 @@ targets:
       - package: HagtampKit
         product: SkinKit
       - package: HagtampKit
-        product: SkinRenderer
+        product: ClassicUI
     info:
       path: App/Info.plist
       properties:

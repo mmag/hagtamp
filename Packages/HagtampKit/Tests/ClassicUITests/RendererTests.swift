@@ -2,7 +2,7 @@ import Foundation
 import SkinKit
 import Testing
 
-@testable import SkinRenderer
+@testable import ClassicUI
 
 @Suite struct RendererTests {
     /// The base skin must match the Winamp Skin Museum screenshot (rendered by

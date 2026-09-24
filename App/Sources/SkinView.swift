@@ -1,12 +1,33 @@
 import AppKit
 import SkinKit
 
+/// A point in skin pixels (window bitmap coordinates, top-left origin).
+struct SkinPoint {
+    var x: Int
+    var y: Int
+}
+
+@MainActor
+protocol SkinViewDelegate: AnyObject {
+    func mouseDown(at point: SkinPoint, event: NSEvent)
+    func mouseDragged(to point: SkinPoint, event: NSEvent)
+    func mouseUp(at point: SkinPoint, event: NSEvent)
+    func rightMouseDown(at point: SkinPoint, event: NSEvent)
+    func scrollWheel(at point: SkinPoint, event: NSEvent)
+    /// Skin cursor for a point; nil shows the system arrow.
+    func cursor(at point: SkinPoint) -> SkinCursorName?
+    func keyDown(_ event: NSEvent) -> Bool
+    func filesDropped(_ urls: [URL])
+}
+
 /// Shows a window bitmap pixel-exactly: one skin pixel is one point
 /// (two in double-size mode), scaled with nearest-neighbour filtering.
 final class SkinView: NSView {
-    var onFileDrop: ((URL) -> Void)?
+    weak var delegate: SkinViewDelegate?
+    var cursors: CursorController?
 
-    private(set) var bitmapSize = CGSize(width: 1, height: 1)
+    private var bitmapWidth = 1
+    private var isTrackingMouse = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -22,30 +43,91 @@ final class SkinView: NSView {
 
     override var wantsUpdateLayer: Bool { true }
     override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+    /// Winamp reacts to the first click even in an inactive window.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     func show(_ bitmap: Bitmap) {
-        bitmapSize = CGSize(width: bitmap.width, height: bitmap.height)
+        bitmapWidth = max(1, bitmap.width)
         layer?.contents = bitmap.makeCGImage()
     }
 
-    // Clicks anywhere drag the window until stage 2 brings real hit-testing.
-    override func mouseDown(with event: NSEvent) {
-        window?.performDrag(with: event)
+    private func skinPoint(_ event: NSEvent) -> SkinPoint {
+        let p = convert(event.locationInWindow, from: nil)
+        let scale = bounds.width / CGFloat(bitmapWidth)
+        return SkinPoint(x: Int((p.x / scale).rounded(.down)), y: Int((p.y / scale).rounded(.down)))
     }
 
+    // MARK: - Mouse
+
+    override func mouseDown(with event: NSEvent) {
+        isTrackingMouse = true
+        delegate?.mouseDown(at: skinPoint(event), event: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        delegate?.mouseDragged(to: skinPoint(event), event: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        isTrackingMouse = false
+        delegate?.mouseUp(at: skinPoint(event), event: event)
+        updateCursor(event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        delegate?.rightMouseDown(at: skinPoint(event), event: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        delegate?.scrollWheel(at: skinPoint(event), event: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if delegate?.keyDown(event) != true { super.keyDown(with: event) }
+    }
+
+    // MARK: - Cursors
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(
+            NSTrackingArea(
+                rect: .zero,
+                options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeAlways, .inVisibleRect],
+                owner: self))
+    }
+
+    override func mouseMoved(with event: NSEvent) { updateCursor(event) }
+    override func mouseEntered(with event: NSEvent) { updateCursor(event) }
+    override func cursorUpdate(with event: NSEvent) { updateCursor(event) }
+
+    override func mouseExited(with event: NSEvent) {
+        guard !isTrackingMouse else { return }
+        cursors?.show(nil)
+    }
+
+    private func updateCursor(_ event: NSEvent) {
+        guard !isTrackingMouse else { return }
+        cursors?.show(delegate?.cursor(at: skinPoint(event)))
+    }
+
+    // MARK: - Drag and drop
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        droppedURL(sender) == nil ? [] : .copy
+        droppedURLs(sender).isEmpty ? [] : .copy
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let url = droppedURL(sender) else { return false }
-        onFileDrop?(url)
+        let urls = droppedURLs(sender)
+        guard !urls.isEmpty else { return false }
+        delegate?.filesDropped(urls)
         return true
     }
 
-    private func droppedURL(_ sender: NSDraggingInfo) -> URL? {
+    private func droppedURLs(_ sender: NSDraggingInfo) -> [URL] {
         let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
-        let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL]
-        return urls?.first { ["wsz", "zip"].contains($0.pathExtension.lowercased()) }
+        return sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] ?? []
     }
 }

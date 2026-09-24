@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "SkinKit", targets: ["SkinKit"]),
-        .library(name: "SkinRenderer", targets: ["SkinRenderer"]),
+        .library(name: "ClassicUI", targets: ["ClassicUI"]),
         .executable(name: "skintool", targets: ["skintool"]),
     ],
     dependencies: [
@@ -18,16 +18,16 @@ let package = Package(
             dependencies: ["ZIPFoundation"],
             resources: [.copy("Resources/base-2.91.wsz")]
         ),
-        .target(name: "SkinRenderer", dependencies: ["SkinKit"]),
-        .executableTarget(name: "skintool", dependencies: ["SkinKit", "SkinRenderer"]),
+        .target(name: "ClassicUI", dependencies: ["SkinKit"]),
+        .executableTarget(name: "skintool", dependencies: ["SkinKit", "ClassicUI"]),
         .testTarget(
             name: "SkinKitTests",
             dependencies: ["SkinKit"],
             resources: [.copy("Fixtures")]
         ),
         .testTarget(
-            name: "SkinRendererTests",
-            dependencies: ["SkinRenderer"],
+            name: "ClassicUITests",
+            dependencies: ["ClassicUI"],
             resources: [.copy("Fixtures")]
         ),
     ]

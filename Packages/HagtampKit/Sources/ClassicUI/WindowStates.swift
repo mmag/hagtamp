@@ -9,7 +9,7 @@ public enum TimeDisplayMode: Sendable {
     case elapsed, remaining
 }
 
-/// Time shown by the main window's big digits and the playlist's mini time.
+/// Time shown by the main window's big digits and the mini time displays.
 public struct TimeDisplay: Sendable, Equatable {
     public var seconds: Int
     public var mode: TimeDisplayMode
@@ -29,6 +29,9 @@ public struct TimeDisplay: Sendable, Equatable {
 
 public struct MainWindowState: Sendable {
     public var focused = true
+    public var shade = false
+    /// The control held down by the pointer (drawn pressed).
+    public var pressed: Control?
     public var status = PlaybackStatus.stopped
     /// Nil while stopped; hidden during the "off" phase of the pause blink.
     public var time: TimeDisplay?
@@ -51,6 +54,7 @@ public struct MainWindowState: Sendable {
     public var equalizerOpen = false
     public var playlistOpen = false
     public var doubleSize = false
+    public var alwaysOnTop = false
     /// Stream buffering ("working") indicator.
     public var working = false
 
@@ -59,11 +63,16 @@ public struct MainWindowState: Sendable {
 
 public struct EqualizerWindowState: Sendable {
     public var focused = false
+    public var shade = false
+    public var pressed: Control?
     public var enabled = true
     public var auto = false
     /// Slider positions 0...1, 0.5 = 0 dB.
     public var preamp = 0.5
     public var bands = [Double](repeating: 0.5, count: 10)
+    /// Shown by the shade mode sliders.
+    public var volume = 200.0 / 255.0
+    public var balance = 0.0
 
     public init() {}
 }
@@ -80,6 +89,8 @@ public struct PlaylistRow: Sendable, Equatable {
 
 public struct PlaylistWindowState: Sendable {
     public var focused = false
+    public var shade = false
+    public var pressed: Control?
     /// Extra size in 25 px (width) and 29 px (height) steps.
     public var widthSteps = 0
     public var heightSteps = 0
@@ -91,9 +102,15 @@ public struct PlaylistWindowState: Sendable {
     public var runningTime = ""
     /// Nil shows the blank mini time (stopped, or the "off" phase of the pause blink).
     public var miniTime: TimeDisplay?
+    /// The bottom-bar menu that is popped up, and the item under the pointer.
+    public var openMenu: PlaylistMenu?
+    public var hoveredMenuItem: Int?
+    /// Current track as shown in shade mode ("1. Artist - Title"), with its length.
+    public var currentTitle: String?
+    public var currentDuration = ""
 
     public init() {}
 
     public var pixelWidth: Int { PlaylistWindowRenderer.baseWidth + widthSteps * 25 }
-    public var pixelHeight: Int { PlaylistWindowRenderer.baseHeight + heightSteps * 29 }
+    public var pixelHeight: Int { shade ? 14 : PlaylistWindowRenderer.baseHeight + heightSteps * 29 }
 }

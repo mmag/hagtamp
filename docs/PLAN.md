@@ -16,7 +16,7 @@ Goal: a macOS player that looks and behaves like Winamp 2.x with classic skins, 
 
 0. **Done** — clean repo, XcodeGen project, `HagtampKit` package, Makefile.
 1. **Done** — `SkinKit` + static rendering of main/EQ/playlist windows, golden comparison against Skin Museum screenshots (`make compare`).
-2. Window system: real hit-testing and controls (pressed states), window shapes from `region.txt` (click-through), dragging, snapping/docking and group moves, double size, shade modes for all windows, skin cursors (`.cur`/`.ani`), focus handling.
+2. **Done** — window system: hit-testing and pressed states for every control, sliders (incl. EQ band sweeping), window shapes from `region.txt` (transparent pixels click through), easy move, snapping to windows and screen edges, main window pulling its docked windows, docked windows following shade/double-size/resize changes, shade modes for all windows, playlist resize and bottom menus, skin cursors (`.cur`/`.ani`), Winamp keys Z X C V B and arrows. Playback is simulated by `PlayerModel` until stage 3.
 3. Audio: local playback, live main window (time, marquee scrolling, kbps/kHz, seek), EQ (presets, `.eqf`), visualizer (spectrum/oscilloscope with all options).
 4. Playlist: selection, drag reordering, scrolling, resize, ADD/REM/SEL/MISC/LIST menus, sorting, `m3u`/`pls`, Jump to file.
 5. Navidrome client + cache + Media Library window.
@@ -33,6 +33,7 @@ Collected while matching the museum screenshots; keep adding.
 - NUMS_EX.BMP overrides NUMBERS.BMP and is never inherited from the base skin.
 - Marquee is 155 px wide (31 glyphs); museum screenshots disagree on the last column.
 - `region.txt`: values may carry trailing `;comments` (Winamp's atoi still reads the number, Webamp drops the section); all polygons of a section form one region with non-zero winding, so hole polygons cut holes (Webamp unions them).
+- Cursor files come with sloppy headers (non-zero reserved field, cursors typed as icons with the hotspot in the planes/bit-count fields); load them like Windows does.
 
 ## Open questions (verify against Reamp / Winamp)
 
@@ -40,4 +41,7 @@ Collected while matching the museum screenshots; keep adding.
 - EQ graph: exact curve algorithm and preamp line direction (Webamp's is an approximation; Reamp has `EqGraphThingy`).
 - Region fill rule: WINDING vs ALTERNATE for overlapping polygons.
 - Playlist font rendering: size, antialiasing, vertical position; Retina text (1x bitmap font look vs crisp text).
-- kbps/kHz alignment for values that are not 3/2 digits long.
+- kbps/kHz alignment for values that are not 3/2 digits long (we right-align).
+- Balance slider: does Winamp snap to center near the middle?
+- EQ shade slider thumbs: vertical position (we use y = 4).
+- Playlist menus: exact press/release behaviour (we: press-drag-release picks, a plain click keeps the menu open).
