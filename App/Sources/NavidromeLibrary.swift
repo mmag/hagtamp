@@ -20,7 +20,7 @@ extension NavidromeService: LibrarySource {
     var revision: String? { isConfigured ? server?.key : nil }
     var unavailableText: String { "Navidrome is not set up." }
     var setupTitle: String { "Preferences…" }
-    func setUp() { (NSApp.delegate as? AppDelegate)?.showPreferences(nil) }
+    func setUp() { (NSApp.delegate as? AppDelegate)?.showPreferences(tab: .navidrome) }
     var activity: String? {
         offlineProgress.map { "Downloading for offline: \($0.done) of \($0.total)" }
     }

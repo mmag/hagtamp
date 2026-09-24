@@ -36,14 +36,14 @@ enum SelfTest {
 
         Task { @MainActor in
             checkPresetMenu(manager)
-            snapPreferences(to: output.appendingPathComponent("preferences.png"))
+            await snapPreferences(to: output, tabs: PreferencesWindowController.Tab.allCases)
             checkRaising(manager)
             await audioSteps(manager, snap: snap)
             await resumeSteps(manager)
             await playlistSteps(manager, snap: snap)
             await localLibrarySteps(manager, snap: snap)
             await lyricsSteps(manager, snap: snap)
-            snapPreferences(to: output.appendingPathComponent("preferences-library.png"))
+            await snapPreferences(to: output, tabs: [.library], suffix: "-scanned")
             await navidromeSteps(manager, snap: snap)
             uiSteps(manager, snap: snap)
             await textSizeSteps(manager, snap: snap)
@@ -356,18 +356,23 @@ enum SelfTest {
         if restored != saved { print("selftest: saved    \(saved)\nselftest: restored \(restored)") }
     }
 
-    private static func snapPreferences(to file: URL) {
-        (NSApp.delegate as? AppDelegate)?.showPreferences(nil)
-        guard let prefs = NSApp.windows.first(where: { $0.title == "Preferences" }) else { return }
-        print("selftest: preferences window content=\(prefs.contentView?.frame.size ?? .zero) fitting=\(prefs.contentView?.fittingSize ?? .zero)")
-        if let view = prefs.contentView {
+    /// preferences-<tab><suffix>.png per tab; the window must fit each tab's content.
+    private static func snapPreferences(to folder: URL, tabs: [PreferencesWindowController.Tab], suffix: String = "") async {
+        for tab in tabs {
+            (NSApp.delegate as? AppDelegate)?.showPreferences(tab: tab)
+            try? await Task.sleep(for: .milliseconds(400))  // the window resizes to the tab
+            guard let prefs = NSApp.windows.first(where: { $0.identifier == PreferencesWindowController.identifier }),
+                let view = prefs.contentView
+            else { continue }
             view.layoutSubtreeIfNeeded()
-            if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-                view.cacheDisplay(in: view.bounds, to: rep)
-                try? rep.representation(using: .png, properties: [:])?.write(to: file)
+            let fits = view.fittingSize.height <= view.frame.height + 1
+            print("selftest: preferences \(tab.title): title=\(prefs.title) size=\(view.frame.size) fits: \(fits ? "ok" : "CLIPPED (needs \(view.fittingSize))")")
+            if let image = capture(prefs) {
+                let name = "preferences-\(tab.title.lowercased())\(suffix).png"
+                try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent(name))
             }
         }
-        prefs.close()
+        NSApp.windows.first { $0.identifier == PreferencesWindowController.identifier }?.close()
     }
 
     /// A window as the window server shows it: title bar, toolbar and Metal layers included.

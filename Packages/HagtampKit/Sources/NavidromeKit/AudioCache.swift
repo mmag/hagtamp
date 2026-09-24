@@ -6,8 +6,8 @@ import StreamingInput
 /// file's modification date is its last use, so no index is needed), and
 /// the offline folder for music kept offline, never evicted or cleared.
 public actor AudioCache {
-    public let directory: URL
-    public let offlineDirectory: URL?
+    public nonisolated let directory: URL
+    public nonisolated let offlineDirectory: URL?
     public var limit: Int64
     /// Downloads in progress, shared by playback and prefetching.
     private var streams: [String: CacheStream] = [:]

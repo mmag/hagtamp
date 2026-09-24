@@ -1,13 +1,38 @@
 import AppKit
 import SwiftUI
 
-/// The Preferences window (⌘,): playback, local library folders, Navidrome server, streaming and cache.
+/// The Preferences window (⌘,): a tab per area, like macOS settings
+/// windows; it reopens on the tab last shown.
 @MainActor
 final class PreferencesWindowController {
+    enum Tab: Int, CaseIterable {
+        case general, library, navidrome, cache
+
+        var title: String {
+            switch self {
+            case .general: "General"
+            case .library: "Library"
+            case .navidrome: "Navidrome"
+            case .cache: "Cache"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .general: "gearshape"
+            case .library: "music.note.list"
+            case .navidrome: "server.rack"
+            case .cache: "internaldrive"
+            }
+        }
+    }
+
+    static let identifier = NSUserInterfaceItemIdentifier("preferences")
     private let player: PlayerModel
     private let navidrome: NavidromeService
     private let library: LocalLibraryService
     private var window: NSWindow?
+    private var tabs: NSTabViewController?
 
     init(player: PlayerModel, navidrome: NavidromeService, library: LocalLibraryService) {
         self.player = player
@@ -15,22 +40,52 @@ final class PreferencesWindowController {
         self.library = library
     }
 
-    func show() {
-        if window == nil {
-            // A grouped Form scrolls and has no height of its own, so the window gets an explicit size.
-            let model = PreferencesModel(player: player, navidrome: navidrome, library: library)
-            let hosting = NSHostingView(rootView: PreferencesView(model: model))
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: PreferencesView.size.width, height: PreferencesView.size.height),
-                styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.contentView = hosting
-            window.title = "Preferences"
-            window.isReleasedWhenClosed = false
-            window.center()
-            self.window = window
-        }
-        window?.makeKeyAndOrderFront(nil)
+    /// Opens the window, on `tab` if given.
+    func show(_ tab: Tab? = nil) {
+        let window = self.window ?? makeWindow()
+        if let tab { tabs?.selectedTabViewItemIndex = tab.rawValue }
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate()
+    }
+
+    private func makeWindow() -> NSWindow {
+        let model = PreferencesModel(player: player, navidrome: navidrome, library: library)
+        let tabs = PreferencesTabs()
+        tabs.tabStyle = .toolbar
+        tabs.addTabViewItem(item(.general, GeneralPreferences(model: model)))
+        tabs.addTabViewItem(item(.library, LibraryPreferences(model: model)))
+        tabs.addTabViewItem(item(.navidrome, NavidromePreferences(model: model)))
+        tabs.addTabViewItem(item(.cache, CachePreferences(model: model)))
+        tabs.selectedTabViewItemIndex = Tab(rawValue: Storage.defaults.integer(forKey: PreferencesTabs.key))?.rawValue ?? 0
+        let window = NSWindow(contentViewController: tabs)
+        window.styleMask = [.titled, .closable]
+        window.toolbarStyle = .preference
+        window.identifier = Self.identifier
+        window.isReleasedWhenClosed = false
+        window.center()
+        self.window = window
+        self.tabs = tabs
+        return window
+    }
+
+    private func item<Pane: View>(_ tab: Tab, _ pane: Pane) -> NSTabViewItem {
+        let hosting = NSHostingController(rootView: pane)
+        hosting.sizingOptions = .preferredContentSize  // the window takes each tab's size
+        hosting.title = tab.title
+        let item = NSTabViewItem(viewController: hosting)
+        item.label = tab.title
+        item.image = NSImage(systemSymbolName: tab.symbol, accessibilityDescription: tab.title)
+        return item
+    }
+}
+
+/// Remembers the tab shown.
+private final class PreferencesTabs: NSTabViewController {
+    static let key = "preferencesTab"
+
+    override func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        super.tabView(tabView, didSelect: tabViewItem)
+        Storage.defaults.set(selectedTabViewItemIndex, forKey: Self.key)
     }
 }
 
@@ -132,13 +187,18 @@ final class PreferencesModel {
         }
     }
 
-    /// "Kept offline: 2 albums, 1 playlist" (right-click one in the Navidrome window).
+    /// "2 albums, 1 playlist: 120 MB…" (right-click one in the Navidrome window to keep it).
     var offlineSummary: String {
         let pins = navidrome.offlinePins
         let albums = pins.filter { $0.kind == .album }.count, playlists = pins.count - albums
         guard !pins.isEmpty else { return "To keep an album or playlist offline, right-click it in the Navidrome window." }
         let parts = [(albums, "album"), (playlists, "playlist")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)\($0.0 == 1 ? "" : "s")" }
-        return "Kept offline: " + parts.joined(separator: ", ") + ", \(offlineUsageMB) MB, apart from the cache."
+        return parts.joined(separator: ", ") + ": \(offlineUsageMB) MB, not counted in the cache limit."
+    }
+
+    func showInFinder(_ folder: URL) {
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(folder)
     }
 
     private func report(_ text: String, error: Bool) {
@@ -147,25 +207,53 @@ final class PreferencesModel {
     }
 }
 
-struct PreferencesView: View {
-    static let size = CGSize(width: 460, height: 800)
+/// One tab: a grouped form as tall as its content.
+private struct PreferencesPane<Content: View>: View {
+    @ViewBuilder var content: Content
 
+    var body: some View {
+        Form { content }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+            .frame(width: 480)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct Caption: View {
+    let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View { Text(text).font(.caption).foregroundStyle(.secondary) }
+}
+
+private struct GeneralPreferences: View {
     @Bindable var model: PreferencesModel
 
     var body: some View {
-        Form {
+        PreferencesPane {
             Section("Playback") {
                 Toggle("Continue the track where it was when Hagtamp quit", isOn: $model.resumesPosition)
             }
             Section("Appearance") {
                 Picker("Text size", selection: $model.textPercent) {
                     ForEach([100, 125, 150, 175, 200], id: \.self) { percent in
-                        Text(percent == 100 ? "100% (as in Winamp)" : "\(percent)%").tag(percent)
+                        Text(percent == 100 ? "100% (classic)" : "\(percent)%").tag(percent)
                     }
                 }
-                Text("The playlist, library lists and lyrics.").font(.caption).foregroundStyle(.secondary)
+                Caption("The playlist, library lists and lyrics.")
             }
-            Section("Local library") {
+        }
+    }
+}
+
+private struct LibraryPreferences: View {
+    @Bindable var model: PreferencesModel
+
+    var body: some View {
+        PreferencesPane {
+            Section("Music folders") {
                 if model.libraryFolders.isEmpty {
                     Text("Add the folders that hold your music.").foregroundStyle(.secondary)
                 }
@@ -184,8 +272,18 @@ struct PreferencesView: View {
                     Spacer()
                     Text(model.libraryStatus).foregroundStyle(.secondary)
                 }
+                Caption("New and changed files in these folders are picked up on their own.")
             }
-            Section("Navidrome server") {
+        }
+    }
+}
+
+private struct NavidromePreferences: View {
+    @Bindable var model: PreferencesModel
+
+    var body: some View {
+        PreferencesPane {
+            Section("Server") {
                 TextField("Address", text: $model.url, prompt: Text(verbatim: "music.example.com"))
                 TextField("Username", text: $model.username)
                 SecureField("Password", text: $model.password, prompt: Text(model.passwordSaved ? "Saved" : ""))
@@ -203,9 +301,17 @@ struct PreferencesView: View {
                 Picker("Quality", selection: $model.quality) {
                     ForEach(StreamQuality.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
-                Text("Tracks start playing while they download and stay in the cache. Lower quality downloads faster.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Caption("Tracks start playing while they download and stay in the cache. Lower quality downloads faster.")
             }
+        }
+    }
+}
+
+private struct CachePreferences: View {
+    @Bindable var model: PreferencesModel
+
+    var body: some View {
+        PreferencesPane {
             Section("Cache") {
                 Stepper(value: $model.cacheLimitMB, in: 200...100_000, step: 500) {
                     Text("Limit: \(model.cacheLimitMB) MB")
@@ -213,13 +319,21 @@ struct PreferencesView: View {
                 HStack {
                     Text("Used: \(model.cacheUsageMB) MB")
                     Spacer()
+                    Button("Show in Finder") { model.showInFinder(model.navidrome.audioCache.directory) }
                     Button("Clear Cache") { model.clearCache() }
                 }
-                Text(model.offlineSummary).font(.caption).foregroundStyle(.secondary)
+                Caption("Navidrome tracks played or fetched ahead; the oldest go first when the cache is full.")
+            }
+            Section("Kept offline") {
+                HStack {
+                    Text(model.offlineSummary).foregroundStyle(.secondary)
+                    Spacer()
+                    if let folder = model.navidrome.audioCache.offlineDirectory, !model.navidrome.offlinePins.isEmpty {
+                        Button("Show in Finder") { model.showInFinder(folder) }
+                    }
+                }
             }
         }
-        .formStyle(.grouped)
-        .frame(width: Self.size.width, height: Self.size.height)
         .onAppear { model.refreshUsage() }
     }
 }

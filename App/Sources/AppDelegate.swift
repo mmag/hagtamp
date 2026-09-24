@@ -76,6 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         preferences.show()
     }
 
+    func showPreferences(tab: PreferencesWindowController.Tab) {
+        preferences.show(tab)
+    }
+
     private lazy var skinBrowser = SkinBrowserController()
 
     @objc func showSkinBrowser(_ sender: Any?) {
