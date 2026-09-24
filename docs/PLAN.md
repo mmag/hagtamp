@@ -10,7 +10,7 @@ Goal: a macOS player that looks and behaves like Winamp 2.x with classic skins, 
 - Storage: plain files. The local library index is JSON (`library.json`, loaded into memory, grouped by `LibraryCatalog`), Navidrome responses are cached as JSON, and the audio cache is files whose modification date is their last use. GRDB/SQLite only if libraries outgrow memory.
 - Streaming = caching: Navidrome tracks are downloaded into the cache (`~/Library/Caches/Hagtamp`) while the player reads the same file; complete files stay cached (LRU with size limit). Music kept offline lives apart in Application Support. Offline mode browses cached responses and plays cached tracks.
 - Libraries are browsed in skinned windows (GEN.BMP/GENEX.BMP, like Winamp 5's media library): one for the local files, one for Navidrome, same controller over a `LibrarySource`.
-- References: Webamp source = spec for sprite coordinates/layout; Reamp (`reamp/`) and Winamp itself = reference for behaviour. Targeted reverse engineering of Reamp only for specific questions.
+- References: Webamp source = spec for sprite coordinates/layout; Winamp itself = reference for behaviour.
 
 ## Stages
 
@@ -54,10 +54,10 @@ Collected while matching the museum screenshots; keep adding.
 - `region.txt`: values may carry trailing `;comments` (Winamp's atoi still reads the number, Webamp drops the section); all polygons of a section form one region with non-zero winding, so hole polygons cut holes (Webamp unions them).
 - Cursor files come with sloppy headers (non-zero reserved field, cursors typed as icons with the hotspot in the planes/bit-count fields); load them like Windows does.
 
-## Open questions (verify against Reamp / Winamp)
+## Open questions (verify against Winamp)
 
 - Is the blank "no minus" glyph drawn in elapsed mode? (We draw it; Webamp doesn't.)
-- EQ graph: exact curve algorithm and preamp line direction (Webamp's is an approximation; Reamp has `EqGraphThingy`).
+- EQ graph: exact curve algorithm and preamp line direction (Webamp's is an approximation).
 - Region fill rule: WINDING vs ALTERNATE for overlapping polygons.
 - Playlist font rendering: size, antialiasing, vertical position; Retina text (1x bitmap font look vs crisp text).
 - kbps/kHz alignment for values that are not 3/2 digits long (we right-align).

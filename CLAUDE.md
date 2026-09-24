@@ -17,7 +17,6 @@ Native macOS music player that reproduces Winamp 2.x (classic `.wsz` skins, as f
   - `skintool` — CLI: `info`, `render`, `sheets` (decoded bitmaps as PNG), `gen` (generic window preview), `compare`.
 - `skins/` — test skins (`winamp.wsz` = the original Winamp 2.91 base skin, used by golden checks). The app's default skin is `SkinKit/Resources/hagtamp-base.wsz`, generated from it by `scripts/retitle_base_skin.py` (title lettering "HAGTAMP", Hagtamp logo on the about button, an H on the menu button).
 - `art/` — the logo as pixel art, drawn by `scripts/make_logo.py`, which also builds the app icon (`App/Assets.xcassets/AppIcon.appiconset`). Edit the script, not the PNGs; then rerun `retitle_base_skin.py` for the skin's copy.
-- `reamp/` — Reamp.app, closed-source reference player (git-ignored). Use it to check Winamp behaviour, don't copy from it.
 - `.corpus/` — ~300 Skin Museum skins + reference screenshots (git-ignored, `make corpus`).
 
 ## Commands

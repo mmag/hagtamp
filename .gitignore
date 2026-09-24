@@ -9,9 +9,6 @@ DerivedData/
 .swiftpm/
 build/
 
-# Reference app (closed-source binary, kept locally only)
-reamp/
-
 # Skin Museum corpus for golden tests (scripts/fetch_skin_corpus.py)
 .corpus/
 

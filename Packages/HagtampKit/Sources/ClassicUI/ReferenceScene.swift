@@ -65,7 +65,7 @@ public enum ReferenceScene {
         // track list in the browser's font).
         MainWindowRenderer.visualizerRect,
         PixelRect(x: 12, y: 232 + 20, width: 243, height: 58),
-        // Deliberate deviations from Webamp, pending verification against Reamp:
+        // Deliberate deviations from Webamp, pending verification against the original:
         // Winamp paints the blank "no minus" glyph in elapsed mode, Webamp leaves the background.
         PixelRect(x: 38, y: 26, width: 9, height: 13),
         // Museum screenshots disagree on the marquee's last column (Webamp versions

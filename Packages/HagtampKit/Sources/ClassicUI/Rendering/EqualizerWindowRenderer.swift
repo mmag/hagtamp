@@ -84,7 +84,7 @@ public enum EqualizerWindowRenderer {
         canvas.draw(skin, Sprite.EqMain.graphBackground, x: ox, y: oy)
 
         let maxY = graphHeight - 1
-        // TODO: Verify against Reamp/Winamp: Webamp draws the preamp line upside down
+        // TODO: Verify against Winamp: Webamp draws the preamp line upside down
         // relative to the slider; we draw it where the slider points.
         let preampY = Int(((1 - min(1, max(0, state.preamp))) * Double(maxY)).rounded())
         canvas.draw(skin, Sprite.EqMain.preampLine, x: ox, y: oy + preampY)
