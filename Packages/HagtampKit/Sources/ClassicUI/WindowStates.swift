@@ -1,3 +1,5 @@
+import SkinKit
+
 /// Everything the renderers need to draw a frame. These are plain snapshots
 /// produced by the UI layer; renderers never hold state themselves.
 
@@ -57,6 +59,8 @@ public struct MainWindowState: Sendable {
     public var alwaysOnTop = false
     /// Stream buffering ("working") indicator.
     public var working = false
+    /// Current visualizer frame (76x16, or 38x5 in shade mode); nil leaves the skin's background.
+    public var visualizer: Bitmap?
 
     public init() {}
 }

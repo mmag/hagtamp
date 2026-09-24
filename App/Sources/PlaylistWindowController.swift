@@ -40,25 +40,28 @@ final class PlaylistWindowController: SkinWindowController {
         s.widthSteps = widthSteps
         s.heightSteps = heightSteps
         s.rows = model.tracks.enumerated().map { i, track in
-            PlaylistRow(title: "\(i + 1). \(track.displayName)", duration: Marquee.timeString(track.duration))
+            PlaylistRow(title: "\(i + 1). \(track.displayName)", duration: track.duration.map { Marquee.timeString(Int($0)) } ?? "")
         }
         s.firstVisibleRow = firstVisibleRow
         s.selectedRows = selectedRows
         s.currentRow = model.currentTrack == nil ? nil : model.currentIndex
-        let selected = selectedRows.compactMap { model.tracks.indices.contains($0) ? model.tracks[$0].duration : nil }.reduce(0, +)
-        let total = model.tracks.map(\.duration).reduce(0, +)
+        let seconds = { (i: Int) in model.tracks.indices.contains(i) ? Int(model.tracks[i].duration ?? 0) : 0 }
+        let selected = selectedRows.map(seconds).reduce(0, +)
+        let total = model.tracks.indices.map(seconds).reduce(0, +)
         s.runningTime = "\(Marquee.timeString(selected))/\(Marquee.timeString(total))"
-        if model.status != .stopped, manager.timeVisible, let track = model.currentTrack {
+        if model.status != .stopped, manager.timeVisible {
             let elapsed = Int(model.elapsed)
-            s.miniTime =
-                manager.timeMode == .elapsed
-                ? TimeDisplay(seconds: elapsed) : TimeDisplay(seconds: track.duration - elapsed, mode: .remaining)
+            if manager.timeMode == .remaining, let duration = model.duration {
+                s.miniTime = TimeDisplay(seconds: max(0, Int(duration) - elapsed), mode: .remaining)
+            } else {
+                s.miniTime = TimeDisplay(seconds: elapsed)
+            }
         }
         s.openMenu = openMenu
         s.hoveredMenuItem = hoveredMenuItem
         if let track = model.currentTrack {
             s.currentTitle = "\(model.currentIndex + 1). \(track.displayName)"
-            s.currentDuration = Marquee.timeString(track.duration)
+            s.currentDuration = model.duration.map { Marquee.timeString(Int($0)) } ?? ""
         }
         return s
     }
@@ -101,7 +104,8 @@ final class PlaylistWindowController: SkinWindowController {
         case .pause: model.pause()
         case .stop: model.stop()
         case .next: model.next()
-        default: break  // eject: stage 3
+        case .eject: manager.openFiles()
+        default: break
         }
     }
 

@@ -17,10 +17,14 @@ Goal: a macOS player that looks and behaves like Winamp 2.x with classic skins, 
 0. **Done** — clean repo, XcodeGen project, `HagtampKit` package, Makefile.
 1. **Done** — `SkinKit` + static rendering of main/EQ/playlist windows, golden comparison against Skin Museum screenshots (`make compare`).
 2. **Done** — window system: hit-testing and pressed states for every control, sliders (incl. EQ band sweeping), window shapes from `region.txt` (transparent pixels click through), easy move, snapping to windows and screen edges, main window pulling its docked windows, docked windows following shade/double-size/resize changes, shade modes for all windows, playlist resize and bottom menus, skin cursors (`.cur`/`.ani`), Winamp keys Z X C V B and arrows. Playback is simulated by `PlayerModel` until stage 3.
-3. Audio: local playback, live main window (time, marquee scrolling, kbps/kHz, seek), EQ (presets, `.eqf`), visualizer (spectrum/oscilloscope with all options).
+3. **Done** — audio on SFBAudioEngine (`AudioCore`): local files in every format SFB decodes, gapless queue honouring shuffle/repeat, Winamp transport semantics, seek, volume (squared curve), balance, 10-band EQ + preamp (peaking filters sized to band spacing, shelves at the ends), EQ presets (Winamp's 17 built-ins, user presets, `.eqf` load/save), visualizer (Nullsoft FFT analyzer with normal/fire/line, thick/thin, peaks, falloffs; oscilloscope dots/lines/solid; shade-mode mini vis) fed from a post-EQ pre-volume tap, file opening (eject, L, drag and drop, Finder). Volume/EQ/visualizer settings persist.
 4. Playlist: selection, drag reordering, scrolling, resize, ADD/REM/SEL/MISC/LIST menus, sorting, `m3u`/`pls`, Jump to file.
 5. Navidrome client + cache + Media Library window.
 6. Polish: Winamp main menu, hotkeys, preferences, skin browser, media keys / Now Playing, Milkdrop (projectM) maybe.
+
+## Licensing notes
+
+- SFBAudioEngine is MIT, but some of its decoders are LGPL (mpg123, LAME, Musepack, libsndfile). Fine for an open-source app; distributing a closed build means honouring LGPL relinking terms or dropping those decoders.
 
 ## Skin format findings
 
@@ -45,3 +49,6 @@ Collected while matching the museum screenshots; keep adding.
 - Balance slider: does Winamp snap to center near the middle?
 - EQ shade slider thumbs: vertical position (we use y = 4).
 - Playlist menus: exact press/release behaviour (we: press-drag-release picks, a plain click keeps the menu open).
+- Visualizer: analyzer bar colours and the 2 px "push down" come from Webamp; Webamp's fire style used the background colour for bar tips, we start at colour 2. Is the vis area drawn while stopped?
+- Volume curve (we use amplitude = slider²) and the EQ filter shapes vs. Winamp's actual equalizer.
+- Streaming (stage 5): SFBAudioEngine's `InputSource` can't be subclassed from Swift; progressive playback of a growing cache file needs another route (custom `PCMDecoding`, or AudioToolbox for transcoded streams).

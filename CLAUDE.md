@@ -7,7 +7,9 @@ Native macOS music player that reproduces Winamp 2.x (classic `.wsz` skins, as f
 - `App/Sources` — AppKit app (borderless skinned windows). Xcode project is generated from `project.yml` by XcodeGen; `*.xcodeproj` is not committed.
 - `Packages/HagtampKit` — Swift package with the testable core:
   - `SkinKit` — skin loading: zip/folder access, BMP decoder, sprite table, `pledit.txt`/`viscolor.txt`/`region.txt`, TEXT.BMP font, base-skin fallback.
-  - `ClassicUI` — `Rendering/`: pure functions `state -> Bitmap` for the main, equalizer and playlist windows (normal and shade); `Interaction/`: control hit areas, slider geometry, window docking/snapping math; `ReferenceScene` + `ImageDiff` for golden comparisons.
+  - `ClassicUI` — `Rendering/`: pure functions `state -> Bitmap` for the main, equalizer and playlist windows (normal and shade); `Interaction/`: control hit areas, slider geometry, window docking/snapping math; `Visualization/`: Winamp's analyzer/oscilloscope; `ReferenceScene` + `ImageDiff` for golden comparisons.
+  - `PlayerCore` — player domain without dependencies: equalizer presets, `.eqf` files.
+  - `AudioCore` — playback on SFBAudioEngine: `AudioEngine` (gapless queue, EQ, balance, volume, visualizer sample tap), `TrackInfo` (tags/properties).
   - `skintool` — CLI: `info`, `render`, `compare`.
 - `skins/` — test skins (`winamp.wsz` = Winamp 2.91 base skin, also bundled as `SkinKit/Resources/base-2.91.wsz`).
 - `reamp/` — Reamp.app, closed-source reference player (git-ignored). Use it to check Winamp behaviour, don't copy from it.
@@ -17,7 +19,7 @@ Native macOS music player that reproduces Winamp 2.x (classic `.wsz` skins, as f
 
 - `make test` — package tests (Swift Testing).
 - `make app` / `make run` — generate the Xcode project, build, launch.
-- `HAGTAMP_SELFTEST=<dir> [HAGTAMP_SELFTEST_SKIN=<skin>] build/DerivedData/Build/Products/Debug/Hagtamp.app/Contents/MacOS/Hagtamp` — debug builds walk through the UI (buttons, shade, resize, double size, docking), write a snapshot per step and quit.
+- `HAGTAMP_SELFTEST=<dir> [HAGTAMP_SELFTEST_SKIN=<skin>] build/DerivedData/Build/Products/Debug/Hagtamp.app/Contents/MacOS/Hagtamp` — debug builds play two generated tones silently (time, visualizer, gapless handover) and walk through the UI (buttons, shade, resize, double size, docking), write a snapshot per step and quit. `AudioCoreTests` also play audio, at zero volume.
 - `make corpus` then `make compare` — render every corpus skin in the museum screenshot state and diff against the screenshots; visual diffs land in `.artifacts/compare` (reference | ours | diff).
 
 ## Conventions

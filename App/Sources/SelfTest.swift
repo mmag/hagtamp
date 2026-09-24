@@ -1,4 +1,5 @@
 #if DEBUG
+import AVFAudio
 import AppKit
 import ClassicUI
 import SkinKit
@@ -14,18 +15,74 @@ enum SelfTest {
         let output = URL(fileURLWithPath: dir)
         try? FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         var step = 0
-        func snap(_ name: String) {
+        let snap: (String) -> Void = { name in
             step += 1
             let url = output.appendingPathComponent(String(format: "%02d-%@.png", step, name))
             try? snapshot(manager).pngData().write(to: url)
             print("selftest: \(url.lastPathComponent) \(layout(manager))")
         }
 
-        let main = manager.main, eq = manager.equalizer, pl = manager.playlist
         snap("start")
 
-        click(main, .play)
-        snap("playing")
+        let savedVolume = manager.model.volume
+        Task { @MainActor in
+            await audioSteps(manager, snap: snap)
+            uiSteps(manager, snap: snap)
+            manager.model.volume = savedVolume  // the slider steps change the saved volume
+            NSApp.terminate(nil)
+        }
+    }
+
+    /// Plays two generated tones silently: time, visualizer, gapless handover.
+    private static func audioSteps(_ manager: WindowManager, snap: (String) -> Void) async {
+        let model = manager.model
+        let tones = [(1000.0, "tone-1k"), (220.0, "tone-220")].compactMap { makeTone(frequency: $0.0, name: $0.1) }
+        model.load(tones, play: true)
+        model.engine.volume = 0  // silent, without touching the saved volume
+        try? await Task.sleep(for: .milliseconds(1500))
+        print("selftest: status=\(model.status) index=\(model.currentIndex) elapsed=\(String(format: "%.2f", model.elapsed)) duration=\(model.duration ?? -1) title=\(model.currentTrack?.displayName ?? "-") kbps=\(model.currentTrack?.bitrate ?? -1)")
+        snap("playing-analyzer")
+
+        manager.visualizerSettings.mode = .oscilloscope
+        try? await Task.sleep(for: .milliseconds(300))
+        snap("playing-oscilloscope")
+        manager.visualizerSettings.mode = .analyzer
+
+        model.seek(to: 0.97)
+        try? await Task.sleep(for: .milliseconds(800))
+        print("selftest: after end of first track index=\(model.currentIndex) status=\(model.status) elapsed=\(String(format: "%.2f", model.elapsed))")
+        snap("gapless-second-track")
+
+        model.pause()
+        try? await Task.sleep(for: .milliseconds(300))
+        snap("paused")
+        model.stop()
+        try? await Task.sleep(for: .milliseconds(200))
+        print("selftest: stopped status=\(model.status)")
+    }
+
+    private static func makeTone(frequency: Double, name: String) -> URL? {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-\(name).wav")
+        let rate = 44100.0
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: rate, AVNumberOfChannelsKey: 2,
+            AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false,
+        ]
+        guard let file = try? AVAudioFile(forWriting: url, settings: settings),
+            let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(3 * rate))
+        else { return nil }
+        buffer.frameLength = buffer.frameCapacity
+        for channel in 0..<Int(file.processingFormat.channelCount) {
+            for i in 0..<Int(buffer.frameLength) {
+                buffer.floatChannelData![channel][i] = 0.6 * Float(sin(2 * .pi * frequency * Double(i) / rate))
+            }
+        }
+        try? file.write(from: buffer)
+        return url
+    }
+
+    private static func uiSteps(_ manager: WindowManager, snap: (String) -> Void) {
+        let main = manager.main, eq = manager.equalizer, pl = manager.playlist
         press(main, .volume)
         snap("volume-pressed")
         release(main, .volume)
@@ -68,7 +125,6 @@ enum SelfTest {
             snap("custom-skin")
             reportClickThrough(main, skin: skin)
         }
-        NSApp.terminate(nil)
     }
 
     // MARK: - Pointer helpers

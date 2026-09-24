@@ -28,6 +28,18 @@ are derived from Webamp (https://github.com/captbaritone/webamp).
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
 
+The visualizer (`ClassicUI/Visualization`) ports Webamp's VisPainter.ts and
+FFTNullsoft.ts; the FFT originates from Nullsoft's MilkDrop (via WACUP's
+vis_classic). The built-in equalizer presets and the `.eqf` test fixtures
+(`Tests/PlayerCoreTests/Fixtures`, including Winamp's `winamp.q1`) come from
+Webamp's `winamp-eqf` package.
+
+## SFBAudioEngine
+
+https://github.com/sbooth/SFBAudioEngine — MIT License, Copyright (c) 2006-2026 Stephen F. Booth.
+It pulls in third-party codecs under their own licenses, some of them LGPL
+(mpg123, LAME, Musepack, libsndfile); see the SFBAudioEngine repository.
+
 ## ZIPFoundation
 
 https://github.com/weichsel/ZIPFoundation — MIT License, Copyright (c) 2017-2024 Thomas Zoechling.

@@ -11,6 +11,7 @@ public enum MainWindowRenderer {
 
     /// Where the visualizer draws (76x16).
     public static let visualizerRect = PixelRect(x: 24, y: 43, width: 76, height: 16)
+    public static let shadeVisualizerRect = PixelRect(x: 79, y: 5, width: 38, height: 5)
     /// 31 glyphs of the TEXT.BMP font.
     public static let marqueeRect = PixelRect(x: 111, y: 27, width: 155, height: 6)
 
@@ -22,6 +23,9 @@ public enum MainWindowRenderer {
         canvas.draw(skin, state.focused ? Sprite.TitleBar.active : Sprite.TitleBar.inactive, x: 0, y: 0)
         drawTitleButtons(&canvas, skin, state)
 
+        if let vis = state.visualizer {
+            canvas.draw(vis, from: vis.bounds, atX: visualizerRect.x, y: visualizerRect.y)
+        }
         drawClutterBar(&canvas, skin, state)
         drawStatus(&canvas, skin, state)
         drawTime(&canvas, skin, state)
@@ -181,6 +185,9 @@ public enum MainWindowRenderer {
             canvas.draw(skin, Sprite.TitleBar.unshade, x: 254, y: 3)
         }
 
+        if let vis = state.visualizer {
+            canvas.draw(vis, from: vis.bounds, atX: shadeVisualizerRect.x, y: shadeVisualizerRect.y)
+        }
         let time = state.status == .stopped ? nil : state.time
         drawMiniTime(&canvas, skin, time, x: 127, y: 4)
 

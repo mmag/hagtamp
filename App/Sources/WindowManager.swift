@@ -1,6 +1,9 @@
 import AppKit
+import AudioCore
 import ClassicUI
+import PlayerCore
 import SkinKit
+import UniformTypeIdentifiers
 
 /// Owns the three classic windows: renders them, keeps docked windows
 /// together, and holds the UI state shared between windows (double size,
@@ -23,6 +26,19 @@ final class WindowManager: NSObject {
     private var visible: Set<WindowID> = [.main, .equalizer, .playlist]
 
     private var uiTimer: Timer?
+    private var displayLink: CADisplayLink?
+
+    // MARK: Visualizer state
+    private let visualizer = Visualizer()
+    /// Latest frame shown in the main window; nil shows the skin's background.
+    private(set) var visualizerFrame: Bitmap?
+    var visualizerSettings = VisualizerSettings() {
+        didSet {
+            UserDefaults.standard.set(try? JSONEncoder().encode(visualizerSettings), forKey: "visualizer")
+            if visualizerSettings.mode == .off { visualizerFrame = nil }
+            renderMain()
+        }
+    }
     private var move: (start: NSPoint, moving: [WindowBox], stationary: [WindowBox])?
 
     init(model: PlayerModel, skin: Skin) {
@@ -31,6 +47,11 @@ final class WindowManager: NSObject {
         super.init()
         cursors.load(skin)
         model.onChange = { [weak self] in self?.playerChanged() }
+        if let data = UserDefaults.standard.data(forKey: "visualizer"),
+            let saved = try? JSONDecoder().decode(VisualizerSettings.self, from: data)
+        {
+            visualizerSettings = saved
+        }
     }
 
     var scale: Int { doubleSize ? 2 : 1 }
@@ -64,6 +85,10 @@ final class WindowManager: NSObject {
         }
         RunLoop.main.add(timer, forMode: .common)
         uiTimer = timer
+
+        let link = main.window.skinView.displayLink(target: self, selector: #selector(visualizerTick))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
         #if DEBUG
         DispatchQueue.main.async { SelfTest.runIfRequested(self) }
         #endif
@@ -100,6 +125,77 @@ final class WindowManager: NSObject {
         for (id, bitmap) in bitmaps {
             controller(id).window.skinView.show(bitmap)
         }
+    }
+
+    /// Re-renders only the main window (visualizer frames).
+    func renderMain() {
+        guard isVisible(.main) else { return }
+        main.window.skinView.show(main.renderMasked())
+    }
+
+    @objc private func visualizerTick() {
+        guard visualizerSettings.mode != .off, isVisible(.main) else { return }
+        switch model.status {
+        case .playing:
+            visualizerFrame = visualizer.render(
+                samples: model.engine.samples.latest(1024), colors: skin.visColors,
+                settings: visualizerSettings, small: main.shade)
+            renderMain()
+        case .paused:
+            break  // the last frame stays up
+        case .stopped:
+            if visualizerFrame != nil {
+                visualizerFrame = nil
+                renderMain()
+            }
+        }
+    }
+
+    @objc func cycleVisualizer() {
+        visualizerSettings.mode = visualizerSettings.nextMode
+    }
+
+    /// Winamp's visualization options (right-click on the visualizer, clutter bar "V").
+    func showVisualizerMenu(for event: NSEvent, in view: NSView) {
+        let menu = NSMenu()
+        let settings = visualizerSettings
+        func choice<T: Equatable>(_ title: String, _ value: T, _ keyPath: WritableKeyPath<VisualizerSettings, T>) -> NSMenuItem {
+            NSMenuItem(title: title, checked: settings[keyPath: keyPath] == value) { [weak self] in
+                self?.visualizerSettings[keyPath: keyPath] = value
+            }
+        }
+        func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.submenu = NSMenu(title: title)
+            items.forEach { item.submenu?.addItem($0) }
+            return item
+        }
+        let falloffTitles: [(String, VisualizerSettings.Falloff)] = [
+            ("Slowest", .slower), ("Slow", .slow), ("Moderate", .moderate), ("Fast", .fast), ("Fastest", .faster),
+        ]
+        menu.addItem(submenu("Visualization mode", [
+            choice("Spectrum analyzer", .analyzer, \.mode),
+            choice("Oscilloscope", .oscilloscope, \.mode),
+            choice("Disabled", .off, \.mode),
+        ]))
+        menu.addItem(submenu("Analyzer options", [
+            choice("Normal style", .normal, \.analyzerStyle),
+            choice("Fire style", .fire, \.analyzerStyle),
+            choice("Line style", .line, \.analyzerStyle),
+            .separator(),
+            choice("Thick bands", .thick, \.bandWidth),
+            choice("Thin bands", .thin, \.bandWidth),
+            .separator(),
+            NSMenuItem(title: "Show peaks", checked: settings.peaks) { [weak self] in self?.visualizerSettings.peaks.toggle() },
+        ]))
+        menu.addItem(submenu("Oscilloscope options", [
+            choice("Dot scope", .dots, \.oscilloscopeStyle),
+            choice("Line scope", .lines, \.oscilloscopeStyle),
+            choice("Solid scope", .solid, \.oscilloscopeStyle),
+        ]))
+        menu.addItem(submenu("Analyzer falloff", falloffTitles.map { choice($0.0, $0.1, \.barFalloff) }))
+        menu.addItem(submenu("Peaks falloff", falloffTitles.map { choice($0.0, $0.1, \.peakFalloff) }))
+        NSMenu.popUpContextMenu(menu, with: event, for: view)
     }
 
     private func playerChanged() {
@@ -222,7 +318,8 @@ final class WindowManager: NSObject {
     var marqueeText: String {
         if let marqueeMessage { return marqueeMessage }
         guard let track = model.currentTrack else { return "Winamp 2.91" }
-        return "\(model.currentIndex + 1). \(track.displayName) (\(Marquee.timeString(track.duration)))"
+        let length = model.duration.map { " (\(Marquee.timeString(Int($0))))" } ?? ""
+        return "\(model.currentIndex + 1). \(track.displayName)\(length)"
     }
 
     var marqueeOffset: Int {
@@ -309,6 +406,7 @@ final class WindowManager: NSObject {
         case "c": model.pause()
         case "v": model.stop()
         case "b": model.next()
+        case "l": openFiles()
         default:
             switch event.keyCode {
             case 126: model.volume = min(1, model.volume + 0.02)
@@ -322,15 +420,60 @@ final class WindowManager: NSObject {
     }
 
     private func seek(bySeconds seconds: Double) {
-        guard let track = model.currentTrack, track.duration > 0 else { return }
-        model.seek(to: model.position + seconds / Double(track.duration))
+        guard let duration = model.duration, duration > 0 else { return }
+        model.seek(to: (model.elapsed + seconds) / duration)
     }
 
-    func filesDropped(_ urls: [URL]) {
-        guard let url = urls.first else { return }
-        if ["wsz", "zip"].contains(url.pathExtension.lowercased()) || url.hasDirectoryPath {
+    /// Skins are applied; audio replaces the playlist and plays (dropped on
+    /// the playlist it is appended instead).
+    func filesDropped(_ urls: [URL], on id: WindowID) {
+        if urls.count == 1, let url = urls.first, Self.isSkin(url) {
             (NSApp.delegate as? AppDelegate)?.loadSkin(from: url)
+            return
         }
-        // Audio files: stage 3.
+        let audio = Self.audioFiles(in: urls)
+        guard !audio.isEmpty else { return }
+        if id == .playlist {
+            model.append(audio)
+        } else {
+            model.load(audio, play: true)
+        }
+    }
+
+    static func isSkin(_ url: URL) -> Bool {
+        if ["wsz", "zip"].contains(url.pathExtension.lowercased()) { return true }
+        guard url.hasDirectoryPath else { return false }
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
+        return files.contains { $0.lowercased() == "main.bmp" }
+    }
+
+    /// Audio files among `urls`, folders expanded recursively in name order.
+    static func audioFiles(in urls: [URL]) -> [URL] {
+        let extensions = TrackInfo.supportedExtensions
+        var result: [URL] = []
+        for url in urls {
+            if url.hasDirectoryPath {
+                let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
+                let found = (enumerator?.allObjects as? [URL] ?? [])
+                    .filter { extensions.contains($0.pathExtension.lowercased()) }
+                    .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+                result += found
+            } else if extensions.contains(url.pathExtension.lowercased()) {
+                result.append(url)
+            }
+        }
+        return result
+    }
+
+    /// Winamp's "Play file(s)": replaces the playlist and plays.
+    @objc func openFiles() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = true
+        panel.allowedContentTypes = TrackInfo.supportedExtensions.compactMap { UTType(filenameExtension: $0) }
+        panel.message = "Choose files or folders to play"
+        guard panel.runModal() == .OK else { return }
+        let audio = Self.audioFiles(in: panel.urls)
+        if !audio.isEmpty { model.load(audio, play: true) }
     }
 }

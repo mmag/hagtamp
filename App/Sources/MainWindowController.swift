@@ -29,20 +29,23 @@ final class MainWindowController: SkinWindowController {
         s.shade = shade
         s.pressed = pressed
         s.status = model.status
-        if model.status != .stopped, manager.timeVisible, let track = model.currentTrack {
+        if model.status != .stopped, manager.timeVisible {
             let elapsed = Int(model.elapsed)
-            s.time =
-                manager.timeMode == .elapsed
-                ? TimeDisplay(seconds: elapsed) : TimeDisplay(seconds: track.duration - elapsed, mode: .remaining)
+            if manager.timeMode == .remaining, let duration = model.duration {
+                s.time = TimeDisplay(seconds: max(0, Int(duration) - elapsed), mode: .remaining)
+            } else {
+                s.time = TimeDisplay(seconds: elapsed)
+            }
         }
         s.marqueeText = pressed == .clutterDoubleSize ? Marquee.doubleSizeText(enabled: manager.doubleSize) : manager.marqueeText
         s.marqueeOffset = pressed == .clutterDoubleSize ? 0 : manager.marqueeOffset
         if let track = model.currentTrack {
-            // Numbers are right-aligned in their boxes.
-            s.kbps = String(track.kbps).leftPadded(to: 3)
-            s.khz = String(track.khz).leftPadded(to: 2)
+            // Right-aligned in their boxes; longer values are cut by the box (1411 kbps shows "141").
+            s.kbps = track.bitrate.map { String($0).leftPadded(to: 3) }
+            s.khz = track.sampleRate.map { String(Int(($0 / 1000).rounded())).leftPadded(to: 2) }
             s.channels = track.channels
         }
+        s.visualizer = manager.visualizerFrame
         s.volume = model.volume
         s.balance = model.balance
         s.position = scrubPosition ?? model.position
@@ -77,9 +80,9 @@ final class MainWindowController: SkinWindowController {
             model.balance = value * 2 - 1
             manager.marqueeMessage = Marquee.balanceText(model.balance)
         case .position:
-            guard model.status != .stopped, let track = model.currentTrack else { return }
+            guard model.status != .stopped, let duration = model.duration else { return }
             scrubPosition = value
-            manager.marqueeMessage = Marquee.seekText(position: value, duration: track.duration)
+            manager.marqueeMessage = Marquee.seekText(position: value, duration: Int(duration))
         default:
             break
         }
@@ -115,7 +118,8 @@ final class MainWindowController: SkinWindowController {
         case .shuffle: model.shuffle.toggle()
         case .repeatToggle: model.repeatEnabled.toggle()
         case .about: NSApp.orderFrontStandardAboutPanel(nil)
-        default: break  // eject, file info: stage 3/4
+        case .eject: manager.openFiles()
+        default: break  // file info: stage 4
         }
     }
 
@@ -131,9 +135,13 @@ final class MainWindowController: SkinWindowController {
             manager.render()
             return false
         case .clutterVisualization:
-            // Visualization menu: stage 3. Show the button pressed while held.
             setPressed(control)
-            return true
+            manager.showVisualizerMenu(for: event, in: window.skinView)
+            setPressed(nil)
+            return false
+        case .visualizer:
+            manager.cycleVisualizer()
+            return false
         case .marquee:
             marqueeDragStartX = point.x
             manager.beginMarqueeDrag()
@@ -159,7 +167,11 @@ final class MainWindowController: SkinWindowController {
     }
 
     override func contextMenuRequested(at point: SkinPoint, event: NSEvent) {
-        manager.showMainMenu(for: event, in: window.skinView)
+        if regions().hit(x: point.x, y: point.y)?.control == .visualizer {
+            manager.showVisualizerMenu(for: event, in: window.skinView)
+        } else {
+            manager.showMainMenu(for: event, in: window.skinView)
+        }
     }
 }
 

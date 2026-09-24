@@ -20,8 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    /// Finder "Open With": skins are applied, audio files are played.
     func application(_ application: NSApplication, open urls: [URL]) {
-        if let url = urls.first { loadSkin(from: url) }
+        windows.filesDropped(urls, on: .main)
     }
 
     // MARK: - Skins
@@ -67,7 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(submenu: appMenu, title: "Hagtamp")
 
         let fileMenu = NSMenu(title: "File")
-        fileMenu.addItem(withTitle: "Open Skin…", action: #selector(openSkin(_:)), keyEquivalent: "o")
+        fileMenu.addItem(target: windows, "Play File…", #selector(WindowManager.openFiles), key: "o", modifiers: .command)
+        fileMenu.addItem(withTitle: "Open Skin…", action: #selector(openSkin(_:)), keyEquivalent: "")
         fileMenu.addItem(withTitle: "Use Base Skin", action: #selector(useBaseSkin(_:)), keyEquivalent: "")
         menu.addItem(submenu: fileMenu, title: "File")
 

@@ -26,6 +26,10 @@ targets:
         product: SkinKit
       - package: HagtampKit
         product: ClassicUI
+      - package: HagtampKit
+        product: PlayerCore
+      - package: HagtampKit
+        product: AudioCore
     info:
       path: App/Info.plist
       properties:
@@ -41,6 +45,10 @@ targets:
             CFBundleTypeRole: Viewer
             LSHandlerRank: Alternate
             CFBundleTypeExtensions: [wsz]
+          - CFBundleTypeName: Audio
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.audio]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.hagtamp.Hagtamp
