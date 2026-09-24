@@ -2,7 +2,7 @@ import AppKit
 import AudioCore
 import ClassicUI
 import Metal
-import MetalKit
+import os
 import Milkdrop
 import MilkdropMetal
 import QuartzCore
@@ -52,27 +52,23 @@ final class VisualizationWindowController: SkinWindowController {
     private var widthSteps = 5
     private var heightSteps = 8
     private var resizeStart: (mouse: NSPoint, width: Int, height: Int)?
-    private let metalView: MTKView
-    private let drawer: VisualizationDrawer?
+    private let metalView: MetalLayerView
+    private var renderLoop: VisualizationRenderLoop?
     let library = PresetLibrary()
     private(set) var presetIndex = -1
     private var history: [Int] = []
     var random = true
-    var locked = false
+    var locked = false {
+        didSet { renderLoop?.setLocked(locked) }
+    }
     private var fullScreen: FullScreenVisualization?
 
     init(manager: WindowManager) {
-        let view = PassthroughMTKView(frame: .zero, device: MTLCreateSystemDefaultDevice())
+        let view = MetalLayerView(device: MTLCreateSystemDefaultDevice())
         metalView = view
-        drawer = view.device.flatMap { VisualizationDrawer(device: $0, samples: manager.model.engine.samples) }
         super.init(id: .visualization, manager: manager)
-        view.colorPixelFormat = .bgra8Unorm
-        view.preferredFramesPerSecond = 60
-        view.isPaused = true
-        view.delegate = drawer
-        drawer?.onPresetFinished = { [weak self] in
-            guard let self, !self.locked else { return }
-            self.next(blend: true)
+        renderLoop = VisualizationRenderLoop(layer: view.metalLayer, samples: manager.model.engine.samples) { [weak self] in
+            self?.next(blend: true)
         }
         window.skinView.addSubview(view)
     }
@@ -104,7 +100,8 @@ final class VisualizationWindowController: SkinWindowController {
         frame.pressed = pressed
         frame.widthSteps = widthSteps
         frame.heightSteps = heightSteps
-        if fullScreen == nil {
+        // Not while full screen (the frame also redraws as it loses focus to the full-screen window).
+        if metalView.superview === window.skinView {
             let scale = CGFloat(manager.scale)
             metalView.frame = NSRect(
                 x: CGFloat(content.x) * scale, y: CGFloat(content.y) * scale,
@@ -116,7 +113,7 @@ final class VisualizationWindowController: SkinWindowController {
     /// Draws only while someone can see it.
     override func visibilityChanged(_ visible: Bool) {
         if visible, presetIndex < 0 { next(blend: false) }
-        metalView.isPaused = !visible && fullScreen == nil
+        renderLoop?.setPaused(!visible && fullScreen == nil)
     }
 
     // MARK: - Presets
@@ -140,7 +137,7 @@ final class VisualizationWindowController: SkinWindowController {
         presetIndex = index
         history.append(index)
         if history.count > 50 { history.removeFirst() }
-        drawer?.load(preset, blend: blend)
+        renderLoop?.load(preset, blend: blend)
         announce(preset.name)
     }
 
@@ -157,7 +154,37 @@ final class VisualizationWindowController: SkinWindowController {
         library.presets.indices.contains(presetIndex) ? PresetLibrary.name(library.presets[presetIndex]) : nil
     }
 
-    var framesDrawn: Int { drawer?.framesDrawn ?? 0 }
+    var framesDrawn: Int { renderLoop?.framesDrawn ?? 0 }
+
+    #if DEBUG
+    /// Self test: the drawing's size in points (the window's content area, or the whole screen).
+    var drawingSizeForTesting: CGSize { metalView.bounds.size }
+    var contentSizeForTesting: CGSize { CGSize(width: content.width * manager.scale, height: content.height * manager.scale) }
+
+    /// Self test: average brightness (0...255) of the content area as the
+    /// window server shows it, which is where a Metal layer can go missing.
+    func onScreenBrightnessForTesting() -> Double? {
+        guard let shot = SelfTest.capture(window) else { return nil }
+        // The content area, drawn into RGBA bytes (the capture's top-left origin, in window points).
+        let scale = CGFloat(shot.width) / max(1, window.frame.width)
+        let points = CGFloat(manager.scale)
+        let crop = CGRect(x: CGFloat(content.x) * points, y: CGFloat(content.y) * points, width: CGFloat(content.width) * points, height: CGFloat(content.height) * points)
+        guard let image = shot.cropping(to: crop.applying(CGAffineTransform(scaleX: scale, y: scale)).integral) else { return nil }
+        let width = image.width, height = image.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn = bytes.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn, width * height > 0 else { return nil }
+        let sum = stride(from: 0, to: bytes.count, by: 4).reduce(0) { $0 + Int(bytes[$1]) + Int(bytes[$1 + 1]) + Int(bytes[$1 + 2]) }
+        return Double(sum) / Double(width * height * 3)
+    }
+    #endif
 
     // MARK: - Keys and mouse
 
@@ -255,12 +282,12 @@ final class VisualizationWindowController: SkinWindowController {
             self.fullScreen = nil
             window.skinView.addSubview(metalView)
             manager.render()
-            metalView.isPaused = !window.isVisible
+            renderLoop?.setPaused(!window.isVisible)
             window.makeKeyAndOrderFront(nil)
         } else {
             guard let screen = window.screen ?? NSScreen.main else { return }
             fullScreen = FullScreenVisualization(view: metalView, screen: screen, controller: self)
-            metalView.isPaused = false
+            renderLoop?.setPaused(false)
         }
     }
 }
@@ -306,52 +333,139 @@ extension VisualizationWindowController {
     }
 }
 
-/// Draws the frames: MTKView calls it on the main thread, 60 times a second.
-private final class VisualizationDrawer: NSObject, MTKViewDelegate {
+/// Draws the visualization on its own thread, in step with the display
+/// (CAMetalDisplayLink): whatever the main thread is busy with, frames keep
+/// coming, and each one is animated for the moment it will be on screen.
+private final class VisualizationRenderLoop: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendable {
+    // Used only on the render thread.
     private let renderer: MilkdropRenderer
     private let session = MilkdropSession()
     private let samples: SampleBuffer
+    private let link: CAMetalDisplayLink
     private let start = CACurrentMediaTime()
-    var onPresetFinished: (@MainActor () -> Void)?
-    private(set) var framesDrawn = 0
+    private var locked = false
+    private var finishReported = false
     /// Seconds a preset stays before the next one blends in.
-    let presetSeconds = 20.0
+    private let presetSeconds = 20.0
+    private let onPresetFinished: @MainActor @Sendable () -> Void
 
-    init?(device: MTLDevice, samples: SampleBuffer) {
-        guard let renderer = MilkdropRenderer(device: device, targetFormat: .bgra8Unorm) else { return nil }
+    private var runLoop: CFRunLoop?
+    private let frames = OSAllocatedUnfairLock(initialState: 0)
+
+    /// `onPresetFinished` runs on the main thread when the preset has had its time.
+    init?(layer: CAMetalLayer, samples: SampleBuffer, onPresetFinished: @escaping @MainActor @Sendable () -> Void) {
+        guard let device = layer.device, let renderer = MilkdropRenderer(device: device, targetFormat: layer.pixelFormat) else { return nil }
         self.renderer = renderer
         self.samples = samples
+        self.onPresetFinished = onPresetFinished
+        link = CAMetalDisplayLink(metalLayer: layer)
         super.init()
         session.presetDuration = presetSeconds
+        // MilkDrop presets are made for 60 frames a second (trails fade per frame).
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
+        link.preferredFrameLatency = 2
+        link.isPaused = true
+        link.delegate = self
+
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread { [self] in
+            runLoop = CFRunLoopGetCurrent()
+            link.add(to: .current, forMode: .default)
+            ready.signal()
+            while true { RunLoop.current.run(mode: .default, before: .distantFuture) }
+        }
+        thread.name = "Visualization"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        ready.wait()
     }
 
     private var now: Double { CACurrentMediaTime() - start }
 
+    var framesDrawn: Int { frames.withLock { $0 } }
+
     func load(_ preset: MilkdropPreset, blend: Bool) {
-        session.load(preset, at: now, blend: blend)
+        perform { loop in
+            loop.session.load(preset, at: loop.now, blend: blend)
+            loop.finishReported = false
+        }
     }
 
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+    func setPaused(_ paused: Bool) {
+        perform { $0.link.isPaused = paused }
+    }
 
-    func draw(in view: MTKView) {
-        let time = now
-        let size = SIMD2(Double(view.drawableSize.width), Double(view.drawableSize.height))
-        guard let frame = session.frame(time: time, samples: samples.latest(1024), size: size),
-            let drawable = view.currentDrawable, let buffer = renderer.makeCommandBuffer()
+    /// A locked preset stays until switched by hand.
+    func setLocked(_ locked: Bool) {
+        perform { $0.locked = locked }
+    }
+
+    /// Runs `work` on the render thread, between frames.
+    private func perform(_ work: @escaping @Sendable (VisualizationRenderLoop) -> Void) {
+        guard let runLoop else { return }
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.defaultMode.rawValue) { work(self) }
+        CFRunLoopWakeUp(runLoop)
+    }
+
+    func metalDisplayLink(_ link: CAMetalDisplayLink, needsUpdate update: CAMetalDisplayLink.Update) {
+        let time = update.targetPresentationTimestamp - start
+        let texture = update.drawable.texture
+        guard let frame = session.frame(time: time, samples: samples.latest(1024), size: SIMD2(Double(texture.width), Double(texture.height))),
+            let buffer = renderer.makeCommandBuffer()
         else { return }
-        renderer.render(frame, to: drawable.texture, commandBuffer: buffer)
-        buffer.present(drawable)
+        renderer.render(frame, to: texture, commandBuffer: buffer)
+        buffer.present(update.drawable)
         buffer.commit()
-        framesDrawn += 1
-        if session.elapsed(at: time) > presetSeconds, !session.isBlending {
-            MainActor.assumeIsolated { onPresetFinished?() }
+        frames.withLock { $0 += 1 }
+        if !locked, !finishReported, session.elapsed(at: time) > presetSeconds, !session.isBlending {
+            finishReported = true
+            let finished = onPresetFinished
+            Task { @MainActor in finished() }
         }
     }
 }
 
-/// An MTKView that leaves the mouse to the skinned window around it.
-private final class PassthroughMTKView: MTKView {
+/// The CAMetalLayer the visualization draws into, sized in pixels; the
+/// mouse goes to the skinned window around it.
+private final class MetalLayerView: NSView {
+    let metalLayer = CAMetalLayer()
+
+    init(device: MTLDevice?) {
+        super.init(frame: .zero)
+        metalLayer.device = device
+        metalLayer.pixelFormat = .bgra8Unorm
+        metalLayer.isOpaque = true
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never  // only Metal draws here
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func makeBackingLayer() -> CALayer { metalLayer }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateDrawableSize()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateDrawableSize()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateDrawableSize()
+    }
+
+    private func updateDrawableSize() {
+        let scale = window?.backingScaleFactor ?? 2
+        metalLayer.contentsScale = scale
+        let size = CGSize(width: max(1, (bounds.width * scale).rounded()), height: max(1, (bounds.height * scale).rounded()))
+        if metalLayer.drawableSize != size { metalLayer.drawableSize = size }
+    }
 }
 
 /// The visualization on a whole screen: the Dock and menu bar step aside,
@@ -361,7 +475,7 @@ private final class FullScreenVisualization {
     private let window: KeyWindow
     private let previousOptions: NSApplication.PresentationOptions
 
-    init(view: MTKView, screen: NSScreen, controller: VisualizationWindowController) {
+    init(view: NSView, screen: NSScreen, controller: VisualizationWindowController) {
         window = KeyWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.backgroundColor = .black
         window.isReleasedWhenClosed = false

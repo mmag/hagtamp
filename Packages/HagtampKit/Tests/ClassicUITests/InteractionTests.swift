@@ -158,3 +158,40 @@ import Testing
         #expect(layout.line(atY: layout.area.y - 1, firstRow: first) == nil)
     }
 }
+
+@Suite struct WindowPlacementTests {
+    let main = WindowBox(.main, x: 100, y: 100, width: 275, height: 116)
+    let wide = WindowBox(.main, x: 0, y: 25, width: 3360, height: 1800)
+
+    @Test func besideTheMainWindowPastOthers() {
+        let art = WindowBox(.albumArt, x: 375, y: 100, width: 275, height: 290)
+        let placed = WindowDocking.placement(.lyrics, width: 300, height: 290, main: main, others: [art], screens: [wide])
+        #expect(placed.x == 650 && placed.y == 100)
+    }
+
+    /// The main window on a second screen whose right side is taken (as seen in use).
+    @Test func staysOnTheMainWindowsScreen() {
+        let laptop = WindowBox(.main, x: 966, y: 1890, width: 1512, height: 950)
+        let main = WindowBox(.main, x: 966, y: 1923, width: 275, height: 116)
+        let others = [
+            WindowBox(.navidromeLibrary, x: 1211, y: 1990, width: 925, height: 406),
+            WindowBox(.lyrics, x: 2136, y: 2034, width: 300, height: 725),
+        ]
+        let placed = WindowDocking.placement(.visualization, width: 400, height: 348, main: main, others: others, screens: [wide, laptop])
+        #expect(placed.x >= laptop.x && placed.right <= laptop.right && placed.y >= laptop.y && placed.bottom <= laptop.bottom)
+    }
+
+    @Test func leftOfTheMainWindowWhenTheRightIsFull() {
+        let screen = WindowBox(.main, x: 0, y: 0, width: 1200, height: 800)
+        let main = WindowBox(.main, x: 700, y: 100, width: 275, height: 116)
+        let placed = WindowDocking.placement(.lyrics, width: 300, height: 290, main: main, others: [], screens: [screen])
+        #expect(placed.x == 400 && placed.y == 100)
+    }
+
+    @Test func raisedWhenTheScreenIsTooShortBelow() {
+        let screen = WindowBox(.main, x: 0, y: 0, width: 1200, height: 800)
+        let main = WindowBox(.main, x: 100, y: 600, width: 275, height: 116)
+        let placed = WindowDocking.placement(.visualization, width: 400, height: 348, main: main, others: [], screens: [screen])
+        #expect(placed.bottom <= 800 && placed.x == 375)
+    }
+}

@@ -5,10 +5,14 @@ import SkinKit
 final class SkinWindow: NSWindow {
     let skinView: SkinView
     var onFocusChange: (() -> Void)?
+    /// Given a place on screen yet (until then it's 1x1 in a corner).
+    var isPlaced = false
 
     init() {
         skinView = SkinView(frame: .zero)
-        super.init(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+        // Not .zero: a window that starts empty never shows Metal layers
+        // added to it later (they draw, but stay off screen).
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 1, height: 1), styleMask: [.borderless], backing: .buffered, defer: false)
         contentView = skinView
         initialFirstResponder = skinView
         makeFirstResponder(skinView)  // transport keys go to the skin view

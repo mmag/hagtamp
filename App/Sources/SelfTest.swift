@@ -249,6 +249,19 @@ enum SelfTest {
         manager.toggleVisualization()
         await wait("visualization draws", seconds: 6) { vis.framesDrawn > 30 && vis.currentPresetName != nil }
         print("selftest: visualization preset=\(vis.currentPresetName ?? "-") frames=\(vis.framesDrawn) presets=\(vis.library.presets.count)")
+        await wait("visualization reaches the window", seconds: 5) { (vis.onScreenBrightnessForTesting() ?? 0) > 1 }
+        print("selftest: visualization on screen brightness=\(vis.onScreenBrightnessForTesting().map { String(format: "%.1f", $0) } ?? "-")")
+        let counted = vis.framesDrawn
+        try? await Task.sleep(for: .seconds(2))
+        let fps = Double(vis.framesDrawn - counted) / 2
+        print("selftest: visualization at 60 fps: \(fps >= 55 ? "ok" : "SLOW") (\(String(format: "%.1f", fps)))")
+        vis.toggleFullScreen()
+        try? await Task.sleep(for: .milliseconds(300))
+        let screen = vis.window.screen?.frame.size ?? .zero
+        print("selftest: visualization fills the screen: \(vis.drawingSizeForTesting == screen ? "ok" : "WRONG SIZE \(vis.drawingSizeForTesting) on \(screen)")")
+        vis.toggleFullScreen()
+        try? await Task.sleep(for: .milliseconds(100))
+        print("selftest: visualization back in its window: \(vis.drawingSizeForTesting == vis.contentSizeForTesting ? "ok" : "WRONG SIZE \(vis.drawingSizeForTesting)")")
         let first = vis.currentPresetName
         _ = vis.handleVisualizationKey(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: vis.window.windowNumber,
@@ -355,6 +368,11 @@ enum SelfTest {
             }
         }
         prefs.close()
+    }
+
+    /// A window as the window server shows it: title bar, toolbar and Metal layers included.
+    static func capture(_ window: NSWindow) -> CGImage? {
+        CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution])
     }
 
     private static func wait(_ what: String, seconds: Double = 8, until done: () -> Bool) async {

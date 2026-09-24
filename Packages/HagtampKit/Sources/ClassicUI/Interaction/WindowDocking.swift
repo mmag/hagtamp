@@ -186,4 +186,33 @@ public enum WindowDocking {
         let placed = windows.filter { isReachable($0, screens: screens) }
         return (placed, windows.filter { !isReachable($0, screens: screens) }.map(\.id))
     }
+
+    /// Where a window opening beside the main one goes, always on the main
+    /// window's screen: to its right (past windows already there), else to
+    /// its left, else wherever it fits on that screen, overlapping if it must.
+    public static func placement(
+        _ id: WindowID, width: Int, height: Int, main: WindowBox, others: [WindowBox], screens: [WindowBox]
+    ) -> WindowBox {
+        let center = (x: main.x + main.width / 2, y: main.y + min(7, main.height / 2))
+        let screen = screens.first { center.x >= $0.x && center.x < $0.right && center.y >= $0.y && center.y < $0.bottom } ?? screens.first
+        func overlaps(_ a: WindowBox, _ b: WindowBox) -> Bool { a.x < b.right && b.x < a.right && a.y < b.bottom && b.y < a.bottom }
+        func fits(_ b: WindowBox) -> Bool {
+            guard let screen else { return true }
+            return b.x >= screen.x && b.right <= screen.right && b.y >= screen.y && b.bottom <= screen.bottom
+        }
+        let blockers = others.filter { $0.id != id && $0.id != main.id } + [main]
+        // Level with the main window, raised if the screen is too short below it.
+        let top = screen.map { max($0.y, min(main.y, $0.bottom - height)) } ?? main.y
+
+        var candidate = WindowBox(id, x: main.right, y: top, width: width, height: height)
+        while let blocker = blockers.first(where: { overlaps($0, candidate) }) { candidate.x = blocker.right }
+        if fits(candidate) { return candidate }
+
+        candidate = WindowBox(id, x: main.x - width, y: top, width: width, height: height)
+        while let blocker = blockers.first(where: { overlaps($0, candidate) }) { candidate.x = blocker.x - width }
+        if fits(candidate) { return candidate }
+
+        guard let screen else { return candidate }
+        return WindowBox(id, x: max(screen.x, screen.right - width), y: top, width: width, height: height)
+    }
 }

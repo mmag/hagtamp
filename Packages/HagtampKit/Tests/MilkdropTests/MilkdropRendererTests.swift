@@ -72,6 +72,22 @@ import Testing
         #expect(pixels.contains { $0 > 100 })
     }
 
+    /// A big target gets a canvas of at most 1024 along its longer side, stretched to fit.
+    @Test func bigTargetsDrawOnABoundedCanvas() throws {
+        let renderer = try #require(MilkdropRenderer(targetFormat: .rgba8Unorm))
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 2362, height: 744, mipmapped: false)
+        descriptor.usage = [.renderTarget, .shaderRead]
+        descriptor.storageMode = .shared
+        let texture = try #require(renderer.device.makeTexture(descriptor: descriptor))
+        let canvas = renderer.canvasSize(for: texture)
+        #expect(canvas.width == 1024 && canvas.height == 323)
+        var frame = still()
+        frame.lines = [MilkdropFrame.Lines(kind: .strip, points: [SIMD2(0, 0.5), SIMD2(1, 0.5)], colors: Array(repeating: SIMD4(1, 1, 1, 1), count: 2))]
+        let pixels = render(frame, into: texture)
+        let row = 372, bright = (0..<2362).filter { pixels[(row * 2362 + $0) * 4] > 100 }.count
+        #expect(bright > 2000)  // the one-pixel line on the canvas is a couple of pixels on the target
+    }
+
     @Test func decayFadesAndShapesFill() throws {
         let renderer = try #require(MilkdropRenderer(targetFormat: .rgba8Unorm))
         let texture = try #require(target(renderer))

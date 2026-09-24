@@ -306,7 +306,8 @@ final class WindowManager: NSObject {
     /// Shows or hides a window beyond the classic three, placing it on first showing.
     private func toggleExtra(_ c: SkinWindowController) {
         let show = !isVisible(c.id)
-        if show && c.window.frame.width == 0 { placeBesideMain(c) }
+        // Never shown, or last left where it can't be grabbed (off a screen's edge, a screen gone).
+        if show && (!c.window.isPlaced || !WindowDocking.isReachable(box(c), screens: screenBoxes())) { placeBesideMain(c) }
         setVisible(c.id, show)
         if show && (c is LibraryWindowController || c is VisualizationWindowController) { c.window.makeKey() }
     }
@@ -314,16 +315,9 @@ final class WindowManager: NSObject {
     /// First showing of an extra window: docked to the right of the main
     /// window, after any windows already there.
     private func placeBesideMain(_ c: SkinWindowController) {
-        let mainBox = box(main)
         let (w, h) = c.pixelSize()
-        var candidate = WindowBox(c.id, x: mainBox.right, y: mainBox.y, width: w * scale, height: h * scale)
-        let others = visibleBoxes().filter { $0.id != c.id && $0.id != .main }
-        while let blocker = others.first(where: { o in
-            o.x < candidate.right && candidate.x < o.right && o.y < candidate.bottom && candidate.y < o.bottom
-        }) {
-            candidate.x = blocker.right
-        }
-        setFrame(c, candidate)
+        setFrame(c, WindowDocking.placement(
+            c.id, width: w * scale, height: h * scale, main: box(main), others: visibleBoxes(), screens: screenBoxes()))
     }
     @objc func togglePlaylist() { setVisible(.playlist, !isVisible(.playlist)) }
 
@@ -396,7 +390,7 @@ final class WindowManager: NSObject {
         guard started else { return }
         var windows: [String: Layout.Window] = [:]
         for c in controllers {
-            let placed = c.window.frame.width > 0
+            let placed = c.window.isPlaced
             let b = box(c)
             windows[c.id.rawValue] = Layout.Window(
                 x: placed ? b.x : nil, y: placed ? b.y : nil, visible: visible.contains(c.id), shade: c.shade,
@@ -483,6 +477,7 @@ final class WindowManager: NSObject {
             x: CGFloat(box.x), y: Self.primaryMaxY - CGFloat(box.y + box.height),
             width: CGFloat(box.width), height: CGFloat(box.height))
         if c.window.frame != frame { c.window.setFrame(frame, display: true) }
+        c.window.isPlaced = true
     }
 
     private func visibleBoxes() -> [WindowBox] {

@@ -20,6 +20,10 @@ public final class MilkdropRenderer {
     private var current = 0
 
     public static let feedbackFormat = MTLPixelFormat.rgba16Float
+    /// The image is made at most this big (longest side) and stretched to
+    /// the target, like MilkDrop's fixed-size canvas: on a big Retina
+    /// window one-pixel lines and dots would otherwise all but vanish.
+    public var maxCanvasSize = 1024
 
     private enum Blend: Hashable { case alpha, additive }
 
@@ -95,9 +99,16 @@ public final class MilkdropRenderer {
         buffer.commit()
     }
 
+    /// The canvas for a target: its shape, at most `maxCanvasSize` along the longer side.
+    func canvasSize(for target: MTLTexture) -> (width: Int, height: Int) {
+        let scale = min(1, Double(maxCanvasSize) / Double(max(target.width, target.height, 1)))
+        return (max(1, Int((Double(target.width) * scale).rounded())), max(1, Int((Double(target.height) * scale).rounded())))
+    }
+
     /// Renders `frame` into `target` (a drawable's texture or an offscreen one).
     public func render(_ frame: MilkdropFrame, to target: MTLTexture, commandBuffer: MTLCommandBuffer) {
-        prepareFeedback(width: target.width, height: target.height)
+        let canvas = canvasSize(for: target)
+        prepareFeedback(width: canvas.width, height: canvas.height)
         guard feedback.count == 2 else { return }
         let previous = feedback[current], next = feedback[1 - current]
         let sampler = frame.wrap ? wrapSampler : clampSampler
@@ -123,8 +134,7 @@ public final class MilkdropRenderer {
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: mesh.count)
 
         // 2. Drawing on top of it, in MilkDrop's order.
-        let size = SIMD2(Float(target.width), Float(target.height))
-        let geometry = DrawGeometry(size: size)
+        let geometry = DrawGeometry(size: SIMD2(Float(canvas.width), Float(canvas.height)))
         if frame.darkenCenter { draw(geometry.darkCenter(), blend: .alpha, encoder) }
         for shape in frame.shapes {
             let fill = geometry.shape(shape)

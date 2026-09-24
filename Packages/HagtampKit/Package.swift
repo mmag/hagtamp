@@ -36,8 +36,10 @@ let package = Package(
             dependencies: ["PlayerCore", "StreamingInput", .product(name: "SFBAudioEngine", package: "SFBAudioEngine")]
         ),
         .target(name: "NavidromeKit", dependencies: ["PlayerCore", "StreamingInput"]),
-        .target(name: "Milkdrop"),
-        .target(name: "MilkdropMetal", dependencies: ["Milkdrop"]),
+        // Per-frame preset code runs thousands of times a frame: optimized even
+        // in debug builds, or the visualization can't keep up.
+        .target(name: "Milkdrop", swiftSettings: [.unsafeFlags(["-O"], .when(configuration: .debug))]),
+        .target(name: "MilkdropMetal", dependencies: ["Milkdrop"], swiftSettings: [.unsafeFlags(["-O"], .when(configuration: .debug))]),
         .target(
             name: "LibraryKit",
             dependencies: ["PlayerCore", .product(name: "SFBAudioEngine", package: "SFBAudioEngine")]
