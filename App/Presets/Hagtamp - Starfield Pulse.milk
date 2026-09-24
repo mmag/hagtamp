@@ -1,0 +1,19 @@
+[preset00]
+fDecay=0.960000
+fGammaAdj=1.600000
+fWaveAlpha=0.000000
+zoom=1.080000
+warp=0.000000
+wavecode_0_enabled=1
+wavecode_0_samples=240
+wavecode_0_bUseDots=1
+wavecode_0_bAdditive=1
+wavecode_0_scaling=1.000000
+wave_0_per_point1=seed = abs(sin(sample*1234.567 + int(time*4)*7.13));
+wave_0_per_point2=spin = abs(sin(sample*987.654 + int(time*4)*3.71))*6.2832;
+wave_0_per_point3=reach = 0.03 + 0.35*seed;
+wave_0_per_point4=x = 0.5 + reach*cos(spin)*0.75; y = 0.5 + reach*sin(spin);
+wave_0_per_point5=bright = 0.4 + 0.6*seed; r = bright; g = bright; b = min(1, bright + 0.2); a = 0.35 + 0.4*abs(value1);
+per_frame_1=zoom = 1.05 + 0.06*max(0, min(2, bass - 1));
+per_frame_2=rot = 0.003*sin(time*0.21);
+per_pixel_1=zoom = zoom + rad*0.02;

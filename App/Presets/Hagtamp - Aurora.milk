@@ -1,0 +1,18 @@
+[preset00]
+fDecay=0.975000
+fGammaAdj=1.800000
+fWaveAlpha=0.000000
+zoom=1.000000
+warp=0.300000
+wavecode_0_enabled=1
+wavecode_0_samples=256
+wavecode_0_bSpectrum=1
+wavecode_0_bDrawThick=1
+wavecode_0_bAdditive=1
+wavecode_0_scaling=1.000000
+wavecode_0_smoothing=0.600000
+wave_0_per_point1=x = sample;
+wave_0_per_point2=y = 0.08 + min(0.25, value1*0.3);
+wave_0_per_point3=r = 0.3 + 0.7*sample; g = 1 - 0.6*sample; b = 0.6 + 0.4*sin(time + sample*3); a = 0.7;
+per_pixel_1=dx = 0.004*sin(y*10 + time);
+per_pixel_2=dy = -0.003 - 0.002*mid_att;

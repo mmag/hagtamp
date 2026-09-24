@@ -1,0 +1,40 @@
+[preset00]
+fDecay=0.930000
+fGammaAdj=1.500000
+nWaveMode=6
+fWaveAlpha=0.600000
+fWaveParam=0.300000
+bAdditiveWaves=1
+zoom=0.990000
+rot=-0.010000
+warp=0.400000
+wave_r=0.400000
+wave_g=0.800000
+wave_b=1.000000
+shapecode_0_enabled=1
+shapecode_0_sides=6
+shapecode_0_textured=1
+shapecode_0_rad=0.300000
+shapecode_0_r=0.900000
+shapecode_0_g=0.900000
+shapecode_0_b=0.950000
+shapecode_0_a=0.550000
+shapecode_0_r2=1.000000
+shapecode_0_g2=1.000000
+shapecode_0_b2=1.000000
+shapecode_0_a2=0.250000
+shapecode_0_border_a=0.000000
+shape_0_per_frame1=ang = time*0.2;
+shape_0_per_frame2=tex_zoom = 1.2 + 0.2*min(2, bass_att);
+shape_0_per_frame3=tex_ang = -time*0.1;
+shapecode_1_enabled=1
+shapecode_1_sides=3
+shapecode_1_num_inst=3
+shapecode_1_additive=1
+shapecode_1_rad=0.060000
+shapecode_1_a=0.800000
+shapecode_1_a2=0.000000
+shape_1_per_frame1=a1 = time*0.6 + instance*2.0944;
+shape_1_per_frame2=x = 0.5 + 0.32*cos(a1); y = 0.5 + 0.32*sin(a1); ang = -a1;
+shape_1_per_frame3=r = 0.5 + 0.5*sin(a1); g = 0.5 + 0.5*sin(a1 + 2.1); b = 0.5 + 0.5*sin(a1 + 4.2);
+shape_1_per_frame4=r2 = r; g2 = g; b2 = b; rad = 0.05 + 0.03*treb_att;

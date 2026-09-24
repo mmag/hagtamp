@@ -62,6 +62,9 @@ class SkinWindowController: NSObject, SkinViewDelegate {
     /// Lets a subclass take a press before normal routing (e.g. an open menu).
     func interceptPress(at point: SkinPoint, event: NSEvent) -> Bool { false }
 
+    /// The window was shown or hidden.
+    func visibilityChanged(_ visible: Bool) {}
+
     /// What the window keeps between launches besides position and shade (size, chosen view).
     func savedState() -> [String: Int] { [:] }
     func restore(_ state: [String: Int]) {}

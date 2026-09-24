@@ -37,7 +37,10 @@ final class WindowManager: NSObject {
     private(set) lazy var navidromeLibrary = LibraryWindowController(id: .navidromeLibrary, source: navidrome, manager: self)
     private(set) lazy var localLibrary = LibraryWindowController(id: .localLibrary, source: localLibraryService, manager: self)
     private(set) lazy var lyrics = LyricsWindowController(manager: self)
-    private var controllers: [SkinWindowController] { [main, equalizer, playlist, albumArt, navidromeLibrary, localLibrary, lyrics] }
+    private(set) lazy var visualization = VisualizationWindowController(manager: self)
+    private var controllers: [SkinWindowController] {
+        [main, equalizer, playlist, albumArt, navidromeLibrary, localLibrary, lyrics, visualization]
+    }
     /// Where extra windows kept their visibility before the saved layout
     /// (read once, when there is no layout yet).
     private static let visibilityKeys: [WindowID: String] = [
@@ -92,6 +95,7 @@ final class WindowManager: NSObject {
         case .navidromeLibrary: navidromeLibrary
         case .localLibrary: localLibrary
         case .lyrics: lyrics
+        case .visualization: visualization
         }
     }
 
@@ -241,7 +245,10 @@ final class WindowManager: NSObject {
     func isVisible(_ id: WindowID) -> Bool { visible.contains(id) }
 
     func setVisible(_ id: WindowID, _ show: Bool) {
-        defer { saveLayout() }
+        defer {
+            controller(id).visibilityChanged(show)
+            saveLayout()
+        }
         let c = controller(id)
         if show {
             visible.insert(id)
@@ -281,6 +288,8 @@ final class WindowManager: NSObject {
     @objc func toggleAlbumArt() { toggleExtra(albumArt) }
     @objc func toggleNavidromeLibrary() { toggleExtra(navidromeLibrary) }
     @objc func toggleLocalLibrary() { toggleExtra(localLibrary) }
+    @objc func toggleVisualization() { toggleExtra(visualization) }
+
     @objc func toggleLyrics() {
         if !isVisible(.lyrics) { lyrics.reloadMissing() }
         toggleExtra(lyrics)
@@ -299,7 +308,7 @@ final class WindowManager: NSObject {
         let show = !isVisible(c.id)
         if show && c.window.frame.width == 0 { placeBesideMain(c) }
         setVisible(c.id, show)
-        if show && c is LibraryWindowController { c.window.makeKey() }
+        if show && (c is LibraryWindowController || c is VisualizationWindowController) { c.window.makeKey() }
     }
 
     /// First showing of an extra window: docked to the right of the main
@@ -437,10 +446,11 @@ final class WindowManager: NSObject {
             }
             y = box(c).bottom
         }
-        for c in [albumArt, navidromeLibrary, localLibrary, lyrics] as [SkinWindowController]
+        for c in [albumArt, navidromeLibrary, localLibrary, lyrics, visualization] as [SkinWindowController]
         where visible.contains(c.id) && (!placed.contains(c.id) || !placed.contains(.main)) {
             placeBesideMain(c)
         }
+        for c in controllers where visible.contains(c.id) { c.visibilityChanged(true) }
         for c in controllers where !visible.contains(c.id) { c.window.orderOut(nil) }
     }
 
@@ -606,6 +616,7 @@ final class WindowManager: NSObject {
         case ([.control], "a"): toggleAlwaysOnTop()
         case ([.control], "p"): (NSApp.delegate as? AppDelegate)?.showPreferences(nil)
         case ([.option], "s"): (NSApp.delegate as? AppDelegate)?.showSkinBrowser(nil)
+        case ([.control, .shift], "k"): toggleVisualization()
         default:
             guard flags.isEmpty || flags == [.shift] else { return false }
             switch event.keyCode {

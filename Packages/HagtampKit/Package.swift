@@ -11,6 +11,8 @@ let package = Package(
         .library(name: "AudioCore", targets: ["AudioCore"]),
         .library(name: "NavidromeKit", targets: ["NavidromeKit"]),
         .library(name: "LibraryKit", targets: ["LibraryKit"]),
+        .library(name: "Milkdrop", targets: ["Milkdrop"]),
+        .library(name: "MilkdropMetal", targets: ["MilkdropMetal"]),
         .executable(name: "skintool", targets: ["skintool"]),
     ],
     dependencies: [
@@ -34,6 +36,8 @@ let package = Package(
             dependencies: ["PlayerCore", "StreamingInput", .product(name: "SFBAudioEngine", package: "SFBAudioEngine")]
         ),
         .target(name: "NavidromeKit", dependencies: ["PlayerCore", "StreamingInput"]),
+        .target(name: "Milkdrop"),
+        .target(name: "MilkdropMetal", dependencies: ["Milkdrop"]),
         .target(
             name: "LibraryKit",
             dependencies: ["PlayerCore", .product(name: "SFBAudioEngine", package: "SFBAudioEngine")]
@@ -55,6 +59,7 @@ let package = Package(
             dependencies: ["AudioCore", "StreamingInput", .product(name: "SFBAudioEngine", package: "SFBAudioEngine")],
             resources: [.copy("Fixtures")]),
         .testTarget(name: "NavidromeKitTests", dependencies: ["NavidromeKit"], resources: [.copy("Fixtures")]),
+        .testTarget(name: "MilkdropTests", dependencies: ["Milkdrop", "MilkdropMetal"]),
         .testTarget(
             name: "LibraryKitTests",
             dependencies: ["LibraryKit", .product(name: "SFBAudioEngine", package: "SFBAudioEngine")]),

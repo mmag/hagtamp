@@ -22,6 +22,9 @@ extension WindowManager {
         menu.addItem(Self.item("Equalizer", checked: isVisible(.equalizer), key: "g", .option) { [weak self] in self?.toggleEqualizer() })
         menu.addItem(Self.item("Album Art", checked: isVisible(.albumArt), key: "a", .option) { [weak self] in self?.toggleAlbumArt() })
         menu.addItem(Self.item("Lyrics", checked: isVisible(.lyrics), key: "y", .option) { [weak self] in self?.toggleLyrics() })
+        menu.addItem(Self.item("Visualization", checked: isVisible(.visualization), key: "k", [.control, .shift]) { [weak self] in
+            self?.toggleVisualization()
+        })
         menu.addItem(Self.item("Local Library", checked: isVisible(.localLibrary), key: "m", .option) { [weak self] in self?.toggleLocalLibrary() })
         menu.addItem(Self.item("Navidrome", checked: isVisible(.navidromeLibrary), key: "l", .option) { [weak self] in self?.toggleNavidromeLibrary() })
         menu.addItem(.separator())

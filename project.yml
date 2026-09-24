@@ -22,6 +22,9 @@ targets:
     sources:
       - App/Sources
       - App/Assets.xcassets
+      - path: App/Presets
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: HagtampKit
         product: SkinKit
@@ -35,6 +38,10 @@ targets:
         product: NavidromeKit
       - package: HagtampKit
         product: LibraryKit
+      - package: HagtampKit
+        product: Milkdrop
+      - package: HagtampKit
+        product: MilkdropMetal
     info:
       path: App/Info.plist
       properties:

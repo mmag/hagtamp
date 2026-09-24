@@ -47,6 +47,7 @@ enum SelfTest {
             await navidromeSteps(manager, snap: snap)
             uiSteps(manager, snap: snap)
             await textSizeSteps(manager, snap: snap)
+            await visualizationSteps(manager, output: output)
             await controlSteps(manager, output: output)
             layoutSteps(manager)
             NSApp.terminate(nil)
@@ -238,6 +239,26 @@ enum SelfTest {
         await wait("resume: stop forgets the spot") { model.status == .playing && model.elapsed > 0.05 && model.elapsed < saved - 0.5 }
         model.stop()
         model.resumesPosition = false
+    }
+
+    /// The visualization window draws presets with Metal and switches on Space;
+    /// every bundled preset is also drawn offscreen into one sheet.
+    private static func visualizationSteps(_ manager: WindowManager, output: URL) async {
+        let model = manager.model, vis = manager.visualization
+        if let tone = makeTone(frequency: 330, name: "visualization", seconds: 8) { model.load([tone], play: true) }
+        manager.toggleVisualization()
+        await wait("visualization draws", seconds: 6) { vis.framesDrawn > 30 && vis.currentPresetName != nil }
+        print("selftest: visualization preset=\(vis.currentPresetName ?? "-") frames=\(vis.framesDrawn) presets=\(vis.library.presets.count)")
+        let first = vis.currentPresetName
+        _ = vis.handleVisualizationKey(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: vis.window.windowNumber,
+            context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49)!)
+        await wait("next preset on Space") { vis.currentPresetName != first }
+        if let sheet = vis.presetSheetForTesting() {
+            try? sheet.write(to: output.appendingPathComponent("visualization-presets.png"))
+        }
+        model.stop()
+        manager.toggleVisualization()
     }
 
     /// Larger text: rows grow with it, fewer fit, clicks still find their row.
@@ -641,7 +662,7 @@ enum SelfTest {
 
     /// All visible windows drawn at their screen positions over a grey backdrop.
     private static func snapshot(_ manager: WindowManager) -> Bitmap {
-        let windows = [manager.main, manager.equalizer, manager.playlist, manager.albumArt, manager.navidromeLibrary, manager.localLibrary, manager.lyrics].filter { $0.window.isVisible }
+        let windows = [manager.main, manager.equalizer, manager.playlist, manager.albumArt, manager.navidromeLibrary, manager.localLibrary, manager.lyrics, manager.visualization].filter { $0.window.isVisible }
         let union = windows.map(\.window.frame).reduce(NSRect.null) { $0.union($1) }.insetBy(dx: -8, dy: -8)
         var canvas = Bitmap(width: Int(union.width), height: Int(union.height), fill: PixelColor(rgb: 0x5A5A5A))
         for c in windows {
@@ -665,7 +686,7 @@ enum SelfTest {
     }
 
     private static func layout(_ manager: WindowManager) -> String {
-        [("main", manager.main), ("eq", manager.equalizer), ("pl", manager.playlist), ("art", manager.albumArt), ("nd", manager.navidromeLibrary), ("local", manager.localLibrary), ("lyrics", manager.lyrics)].map { name, c in
+        [("main", manager.main), ("eq", manager.equalizer), ("pl", manager.playlist), ("art", manager.albumArt), ("nd", manager.navidromeLibrary), ("local", manager.localLibrary), ("lyrics", manager.lyrics), ("vis", manager.visualization)].map { name, c in
             let f = c.window.frame
             return c.window.isVisible ? "\(name)=\(Int(f.minX)),\(Int(f.maxY)) \(Int(f.width))x\(Int(f.height))" : "\(name)=hidden"
         }.joined(separator: " ")

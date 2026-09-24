@@ -1,7 +1,7 @@
 import SkinKit
 
 public enum WindowID: String, Hashable, Sendable, CaseIterable, Codable {
-    case main, equalizer, playlist, albumArt, navidromeLibrary, localLibrary, lyrics
+    case main, equalizer, playlist, albumArt, navidromeLibrary, localLibrary, lyrics, visualization
 }
 
 /// A window's frame in global top-left coordinates (y grows downwards), in points.

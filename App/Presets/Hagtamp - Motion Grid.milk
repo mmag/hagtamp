@@ -1,0 +1,24 @@
+[preset00]
+fDecay=0.930000
+fGammaAdj=1.600000
+nWaveMode=7
+fWaveAlpha=0.700000
+bMaximizeWaveColor=1
+zoom=1.000000
+warp=0.200000
+nMotionVectorsX=16
+nMotionVectorsY=12
+mv_l=2.000000
+mv_r=0.400000
+mv_g=0.900000
+mv_b=1.000000
+mv_a=0.400000
+ob_size=0.010000
+ob_a=0.300000
+wave_r=0.300000
+wave_g=1.000000
+wave_b=0.600000
+per_frame_1=ob_r = 0.5 + 0.5*sin(time); ob_g = 0.3; ob_b = 0.5 + 0.5*sin(time + 2);
+per_frame_2=ob_size = 0.005 + 0.01*min(2, bass_att);
+per_pixel_1=rot = 0.03*(0.8 - rad)*sin(time*0.4);
+per_pixel_2=zoom = 1 + 0.01*sin(rad*8 - time*2);
