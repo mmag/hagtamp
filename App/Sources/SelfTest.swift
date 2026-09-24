@@ -17,6 +17,13 @@ enum SelfTest {
         setvbuf(stdout, nil, _IOLBF, 0)  // progress stays visible if a step hangs
         let output = URL(fileURLWithPath: dir)
         try? FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        if let shots = ProcessInfo.processInfo.environment["HAGTAMP_SCREENSHOTS"] {
+            Task { @MainActor in
+                await Screenshots.run(manager, output: URL(fileURLWithPath: shots), work: output)
+                NSApp.terminate(nil)
+            }
+            return
+        }
         var step = 0
         let snap: (String) -> Void = { name in
             step += 1

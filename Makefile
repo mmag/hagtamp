@@ -4,7 +4,7 @@ DERIVED := build/DerivedData
 APP := $(DERIVED)/Build/Products/Debug/Hagtamp.app
 KIT := Packages/HagtampKit
 
-.PHONY: project app run test corpus compare clean
+.PHONY: project app run test screenshots corpus compare clean
 
 project:
 	xcodegen generate --quiet
@@ -18,6 +18,10 @@ run: app
 
 test:
 	swift test --package-path $(KIT)
+
+# The README's pictures: a made-up library in the default skin, into docs/screenshots.
+screenshots: app
+	HAGTAMP_SELFTEST=$$(mktemp -d) HAGTAMP_SCREENSHOTS=$(CURDIR)/docs/screenshots $(APP)/Contents/MacOS/Hagtamp
 
 # Downloads ~300 skins with reference screenshots from the Winamp Skin Museum.
 corpus:

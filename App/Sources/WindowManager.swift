@@ -514,6 +514,14 @@ final class WindowManager: NSObject {
 
     // MARK: - Marquee and blinking
 
+    #if DEBUG
+    /// Screenshots show the title from its start.
+    func restartMarqueeForTesting() {
+        marqueeStep = 0
+        render()
+    }
+    #endif
+
     /// Temporary text while a slider is dragged ("Volume: 78%").
     var marqueeMessage: String? {
         didSet { if marqueeMessage != oldValue { render() } }

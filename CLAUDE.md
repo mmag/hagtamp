@@ -26,6 +26,7 @@ Native macOS music player that reproduces Winamp 2.x (classic `.wsz` skins, as f
 - `make app` / `make run` — generate the Xcode project, build, launch.
 - `HAGTAMP_SELFTEST=<dir> [HAGTAMP_SELFTEST_SKIN=<skin>] build/DerivedData/Build/Products/Debug/Hagtamp.app/Contents/MacOS/Hagtamp` — debug builds play two generated tones silently (time, visualizer, gapless handover) and walk through the UI (buttons, shade, resize, double size, docking), write a snapshot per step and quit. `AudioCoreTests` also play audio, at zero volume.
 - `scripts/navidrome_dev.sh` — local Navidrome (http://localhost:4533, admin/admin) with a generated test library; `NavidromeKitTests` live tests and the self test's Navidrome steps run when it is up. Localhost downloads finish before playback starts; to exercise streaming, put a throttling proxy in front and set `HAGTAMP_SELFTEST_NAVIDROME=http://localhost:<port>` (the self test logs `seekable=false` when a track started as a stream).
+- `make screenshots` — the README's pictures in `docs/screenshots`: the self test's isolated app plays a made-up library (`Screenshots.swift`: invented artists, synthesized music, generated covers, engine muted) and captures its windows.
 - `make corpus` then `make compare` — render every corpus skin in the museum screenshot state and diff against the screenshots; visual diffs land in `.artifacts/compare` (reference | ours | diff).
 
 mpg123's per-decoder setup isn't thread-safe: open decoders only on SFB's decoding thread (the app does), and keep tests that open MP3 decoders serialized.
