@@ -27,6 +27,12 @@ enum SelfTest {
 
         manager.textSize = .normal  // steps click rows by pixel, at Winamp's size
         snap("start")
+        if let icon = NSApp.applicationIconImage, let tiff = icon.tiffRepresentation {
+            print("selftest: app icon size=\(icon.size) reps=\(icon.representations.map { Int($0.pixelsWide) })")
+            try? NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])?.write(to: output.appendingPathComponent("app-icon.png"))
+        } else {
+            print("selftest: app icon: none")
+        }
 
         Task { @MainActor in
             checkPresetMenu(manager)

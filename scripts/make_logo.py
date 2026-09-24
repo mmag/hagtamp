@@ -253,12 +253,18 @@ def main():
     os.makedirs(folder, exist_ok=True)
     with open("App/Assets.xcassets/Contents.json", "w") as f:
         json.dump({"info": {"author": "xcode", "version": 1}}, f, indent=2)
+    # One file per slot, named like Xcode's: actool drops every size group
+    # whose image another slot also uses (the icon then comes out generic).
+    for old in os.listdir(folder):
+        if old.endswith(".png"):
+            os.remove(os.path.join(folder, old))
+    rendered = {size: icon(size, big, mini) for size in (16, 32, 64, 128, 256, 512, 1024)}
     images = []
-    for size in (16, 32, 64, 128, 256, 512, 1024):
-        icon(size, big, mini).save(f"{folder}/icon_{size}.png")
     for points in (16, 32, 128, 256, 512):
         for scale in (1, 2):
-            images.append({"idiom": "mac", "scale": f"{scale}x", "size": f"{points}x{points}", "filename": f"icon_{points * scale}.png"})
+            name = f"icon_{points}x{points}{'@2x' if scale == 2 else ''}.png"
+            rendered[points * scale].save(f"{folder}/{name}")
+            images.append({"idiom": "mac", "scale": f"{scale}x", "size": f"{points}x{points}", "filename": name})
     with open(f"{folder}/Contents.json", "w") as f:
         json.dump({"images": images, "info": {"author": "xcode", "version": 1}}, f, indent=2)
 
