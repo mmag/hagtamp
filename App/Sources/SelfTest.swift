@@ -2,6 +2,7 @@
 import AVFAudio
 import AppKit
 import ClassicUI
+import NavidromeKit
 import SFBAudioEngine
 import SkinKit
 
@@ -37,6 +38,7 @@ enum SelfTest {
             snapPreferences(to: output.appendingPathComponent("preferences-library.png"))
             await navidromeSteps(manager, snap: snap)
             uiSteps(manager, snap: snap)
+            await controlSteps(manager, output: output)
             layoutSteps(manager)
             NSApp.terminate(nil)
         }
@@ -206,6 +208,58 @@ enum SelfTest {
         model.resumesPosition = false
     }
 
+    /// Winamp's menu and keys, media controls, the stop variants and skins.
+    private static func controlSteps(_ manager: WindowManager, output: URL) async {
+        let model = manager.model
+        func titles(_ menu: NSMenu) -> String { menu.items.map(\.title).filter { !$0.isEmpty }.joined(separator: " | ") }
+        print("selftest: main menu \(titles(manager.mainMenu()))")
+        print("selftest: playback menu \(titles(manager.playbackMenu()))")
+        print("selftest: skins menu \(titles(manager.skinsMenu()))")
+
+        func press(_ key: String, _ modifiers: NSEvent.ModifierFlags = []) {
+            _ = manager.handleKey(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: manager.main.window.windowNumber,
+                context: nil, characters: key, charactersIgnoringModifiers: key, isARepeat: false, keyCode: 0)!)
+        }
+        let repeatBefore = model.repeatEnabled, shuffleBefore = model.shuffle, timeBefore = manager.timeMode
+        press("r")
+        press("s")
+        press("t", .control)
+        let keysOK = model.repeatEnabled != repeatBefore && model.shuffle != shuffleBefore && manager.timeMode != timeBefore
+        press("r")
+        press("s")
+        press("t", .control)
+        print("selftest: keys R S Ctrl+T: \(keysOK ? "ok" : "FAIL")")
+
+        let tones = [(660.0, "short-a"), (880.0, "short-b")].compactMap { makeTone(frequency: $0.0, name: $0.1, seconds: 1.5) }
+        model.load(tones, play: true)
+        await wait("now playing") { model.status == .playing && model.elapsed > 0.2 }
+        manager.nowPlaying.update()
+        print("selftest: now playing \(manager.nowPlaying.summary)")
+        model.fadeOutAndStop()
+        await wait("stop with fadeout", seconds: 4) { model.status == .stopped }
+        print("selftest: volume after the fade \(abs(model.engine.volume - model.volume) < 0.001 ? "restored" : "FAIL")")
+        model.play(trackAt: 0)
+        await wait("playing again") { model.status == .playing && model.elapsed > 0.1 }
+        model.stopsAfterCurrent = true
+        await wait("stop after current", seconds: 5) { model.status == .stopped }
+        print("selftest: stopped after current at index \(model.currentIndex ?? -1) (expect 0)")
+
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let installed = SkinLibrary.install(repository.appendingPathComponent("skins/winamp.wsz"))
+        print("selftest: skins installed=\(SkinLibrary.installed().map(SkinLibrary.name)) thumbnail=\(SkinLibrary.thumbnail(of: installed) != nil ? "ok" : "FAIL")")
+        (NSApp.delegate as? AppDelegate)?.showSkinBrowser(nil)
+        try? await Task.sleep(for: .milliseconds(1500))  // thumbnails render in the background
+        if let browser = NSApp.windows.first(where: { $0.title == "Skins" }), let view = browser.contentView {
+            view.layoutSubtreeIfNeeded()
+            if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: output.appendingPathComponent("skin-browser.png"))
+            }
+            browser.close()
+        }
+    }
+
     /// The layout comes back as it was saved: positions, shade, sizes, visibility.
     private static func layoutSteps(_ manager: WindowManager) {
         manager.saveLayout()
@@ -272,6 +326,20 @@ enum SelfTest {
         await wait("local library scanned") { library.summary.contains("artists=2") && service.progress == nil }
         print("selftest: local \(library.summary)")
         snap("local-artists")
+        // A file added to a watched folder shows up on its own.
+        let added = music.appendingPathComponent("Foxtrot/First/01 One.flac")
+        try? FileManager.default.createDirectory(at: added.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let wav = makeTone(frequency: 550, name: "library-new", seconds: 1) {
+            try? AudioConverter.convert(wav, to: added)
+            if let file = try? AudioFile(readingPropertiesAndMetadataFrom: added) {
+                file.metadata.title = "One"
+                file.metadata.artist = "Foxtrot"
+                file.metadata.albumTitle = "First"
+                try? file.writeMetadata()
+            }
+        }
+        await wait("local library noticed a new file", seconds: 20) { library.summary.contains("artists=3") }
+        library.selectForTesting(row: 0, in: 0)
         library.selectForTesting(row: 0, in: 0)
         await wait("local artist") { library.summary.contains("albums=1 ") && library.summary.contains("songs=2 ") }
         print("selftest: local \(library.summary)")
@@ -281,7 +349,7 @@ enum SelfTest {
         print("selftest: local \(library.summary)")
         library.searchForTesting("")
         library.chooseViewForTesting(1)
-        await wait("local recently added") { library.summary.contains("view=Recently Added") && library.summary.contains("albums=2 ") }
+        await wait("local recently added") { library.summary.contains("view=Recently Added") && library.summary.contains("albums=3 ") }
         library.selectForTesting(row: 0, in: 0)
         await wait("recent album tracks") { library.summary.contains("songs=") && !library.summary.contains("songs=0 ") }
         library.playAllForTesting()
@@ -343,6 +411,16 @@ enum SelfTest {
         }
         clickSidebar(2)
         await wait("recently added") { library.summary.contains("albums=4") }
+        // Keep offline: the album's songs download and stay; the row gets its dot.
+        library.setKeptOfflineForTesting(list: 0, row: 0, true)
+        let navidrome = manager.navidrome
+        await wait("kept offline", seconds: 30) {
+            navidrome.offlineProgress == nil && !(navidrome.offlinePins.first?.songIDs.isEmpty ?? true)
+                && navidrome.offlinePins.first!.songIDs.allSatisfy { navidrome.cachedFile(for: NavidromeTrack.url(songID: $0)) != nil }
+        }
+        let folder = navidrome.offlinePins.first?.songIDs.first.flatMap { navidrome.cachedFile(for: NavidromeTrack.url(songID: $0)) }?.deletingLastPathComponent().lastPathComponent
+        print("selftest: offline \(navidrome.offlinePins.map { "\($0.name): \($0.songIDs.count) songs" }) in=\(folder ?? "-") menu=\(library.contextMenuTitlesForTesting(list: 0, row: 0))")
+        library.setKeptOfflineForTesting(list: 0, row: 0, false)
         clickSidebar(3)
         await wait("playlists") { library.summary.contains("view=Playlists") && !library.summary.contains("Loading") }
         print("selftest: library \(library.summary)")

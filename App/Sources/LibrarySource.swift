@@ -28,6 +28,12 @@ struct LibraryTrack: Sendable {
     var number: Int?
 }
 
+/// Something a library can keep offline.
+enum LibraryItem {
+    case album(LibraryAlbum)
+    case playlist(LibraryPlaylist)
+}
+
 /// The lists of a view, or search results.
 struct LibraryContent: Sendable {
     var artists: [LibraryArtist] = []
@@ -77,4 +83,20 @@ protocol LibrarySource: AnyObject {
     func tracks(of albums: [LibraryAlbum]) async throws -> [LibraryTrack]
     func tracks(of playlist: LibraryPlaylist) async throws -> [LibraryTrack]
     func search(_ query: String) async throws -> LibraryContent
+
+    /// Whether an album or playlist is kept offline; nil where that makes no sense (local files).
+    func isKeptOffline(_ item: LibraryItem) -> Bool?
+    func setKeptOffline(_ item: LibraryItem, _ keep: Bool)
+}
+
+extension LibrarySource {
+    func isKeptOffline(_ item: LibraryItem) -> Bool? { nil }
+    func setKeptOffline(_ item: LibraryItem, _ keep: Bool) {}
+
+    func tracks(of item: LibraryItem) async throws -> [LibraryTrack] {
+        switch item {
+        case .album(let album): try await tracks(of: [album])
+        case .playlist(let playlist): try await tracks(of: playlist)
+        }
+    }
 }

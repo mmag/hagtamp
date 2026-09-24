@@ -1,19 +1,26 @@
 import Foundation
 import StreamingInput
 
-/// Downloaded tracks, kept as plain files and evicted least recently used
-/// first once the cache grows past its limit. A file's modification date is
-/// its last use, so no separate index is needed.
+/// Downloaded tracks as plain files, in two places: the cache proper,
+/// whose least recently used files go once it grows past its limit (a
+/// file's modification date is its last use, so no index is needed), and
+/// the offline folder for music kept offline, never evicted or cleared.
 public actor AudioCache {
     public let directory: URL
+    public let offlineDirectory: URL?
     public var limit: Int64
     /// Downloads in progress, shared by playback and prefetching.
     private var streams: [String: CacheStream] = [:]
+    /// File name prefixes of what is kept offline.
+    private var offline: Set<String> = []
 
-    public init(directory: URL, limit: Int64) {
+    public init(directory: URL, offlineDirectory: URL? = nil, limit: Int64) {
         self.directory = directory
+        self.offlineDirectory = offlineDirectory
         self.limit = limit
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for folder in [directory, offlineDirectory].compactMap({ $0 }) {
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
     }
 
     public func setLimit(_ bytes: Int64) {
@@ -30,9 +37,51 @@ public actor AudioCache {
 
     /// Non-isolated check without touching the file, for synchronous callers.
     public nonisolated func peek(_ key: String) -> URL? {
-        let prefix = Self.fileName(key) + "."
-        let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        return files.first { $0.hasPrefix(prefix) && !$0.hasSuffix(".part") }.map { directory.appendingPathComponent($0) }
+        find(fileNamePrefix: Self.fileName(key) + ".")
+    }
+
+    /// Any finished file whose key starts with `keyPrefix` (e.g. one song in any quality).
+    public nonisolated func peek(prefix keyPrefix: String) -> URL? {
+        find(fileNamePrefix: Self.fileName(keyPrefix))
+    }
+
+    /// The offline folder first, then the cache.
+    private nonisolated func find(fileNamePrefix prefix: String) -> URL? {
+        for folder in [offlineDirectory, directory].compactMap({ $0 }) {
+            let files = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+            if let name = files.first(where: { $0.hasPrefix(prefix) && !$0.hasSuffix(".part") }) {
+                return folder.appendingPathComponent(name)
+            }
+        }
+        return nil
+    }
+
+    /// Keeps files whose keys start with these prefixes offline: they move to
+    /// the offline folder (now and when downloaded), and files no longer
+    /// kept move back into the cache.
+    public func keepOffline(keyPrefixes: Set<String>) {
+        offline = Set(keyPrefixes.map(Self.fileName))
+        settleOffline()
+    }
+
+    private func isOffline(_ name: String) -> Bool {
+        offline.contains { name.hasPrefix($0) }
+    }
+
+    private func settleOffline() {
+        guard let offlineDirectory else { return }
+        let manager = FileManager.default
+        for name in (try? manager.contentsOfDirectory(atPath: directory.path)) ?? [] where !name.hasSuffix(".part") && isOffline(name) {
+            try? manager.removeItem(at: offlineDirectory.appendingPathComponent(name))
+            try? manager.moveItem(at: directory.appendingPathComponent(name), to: offlineDirectory.appendingPathComponent(name))
+        }
+        for name in (try? manager.contentsOfDirectory(atPath: offlineDirectory.path)) ?? [] where !isOffline(name) {
+            let target = directory.appendingPathComponent(name)
+            try? manager.removeItem(at: target)
+            if (try? manager.moveItem(at: offlineDirectory.appendingPathComponent(name), to: target)) != nil {
+                try? manager.setAttributes([.modificationDate: Date()], ofItemAtPath: target.path)
+            }
+        }
     }
 
     /// Downloads `url` into the cache unless it is already there.
@@ -40,7 +89,7 @@ public actor AudioCache {
         if let cached = file(for: key) { return cached }
         let stream = stream(url, key: key, fileExtension: fileExtension)
         try await stream.completion()
-        return stream.url
+        return peek(key) ?? stream.url  // it may have moved offline
     }
 
     /// A download that can be played while it runs: the running one for
@@ -61,14 +110,23 @@ public actor AudioCache {
 
     private func streamFinished(_ key: String) {
         streams[key] = nil
+        settleOffline()
         trim()
     }
 
-    /// Bytes used.
+    /// Bytes in the cache (not counting music kept offline).
     public func usage() -> Int64 {
         entries().reduce(0) { $0 + $1.size }
     }
 
+    /// Bytes of music kept offline.
+    public func offlineUsage() -> Int64 {
+        guard let offlineDirectory else { return 0 }
+        let files = (try? FileManager.default.contentsOfDirectory(at: offlineDirectory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        return files.reduce(0) { $0 + Int64((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+    }
+
+    /// Empties the cache; music kept offline stays.
     public func clear() {
         for entry in entries() { try? FileManager.default.removeItem(at: entry.url) }
     }

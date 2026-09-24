@@ -21,7 +21,23 @@ extension NavidromeService: LibrarySource {
     var unavailableText: String { "Navidrome is not set up." }
     var setupTitle: String { "Preferences…" }
     func setUp() { (NSApp.delegate as? AppDelegate)?.showPreferences(nil) }
-    var activity: String? { nil }
+    var activity: String? {
+        offlineProgress.map { "Downloading for offline: \($0.done) of \($0.total)" }
+    }
+
+    func isKeptOffline(_ item: LibraryItem) -> Bool? {
+        switch item {
+        case .album(let album): isKeptOffline(.album, id: album.id)
+        case .playlist(let playlist): isKeptOffline(.playlist, id: playlist.id)
+        }
+    }
+
+    func setKeptOffline(_ item: LibraryItem, _ keep: Bool) {
+        switch item {
+        case .album(let album): setKeptOffline(.album, id: album.id, name: album.name, keep)
+        case .playlist(let playlist): setKeptOffline(.playlist, id: playlist.id, name: playlist.name, keep)
+        }
+    }
     var tracksHaveTags: Bool { true }
 
     private var connectedClient: NavidromeClient {

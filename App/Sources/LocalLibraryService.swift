@@ -14,6 +14,8 @@ final class LocalLibraryService: LibrarySource {
     private var catalogRevision = 0
     private(set) var progress: ScanProgress?
     private var lastProgressReport = Date.distantPast
+    /// Rescans when files change in the folders.
+    private var watcher: FolderWatcher?
     var onChange: (() -> Void)?
     /// Preferences follow the folders and scanning too.
     var onStatusChange: (() -> Void)?
@@ -28,6 +30,12 @@ final class LocalLibraryService: LibrarySource {
                 progress: { progress in Task { @MainActor [weak self] in self?.progressChanged(progress) } })
             await library.open(folders: folders)
         }
+        watch()
+    }
+
+    private func watch() {
+        let library = self.library
+        watcher = FolderWatcher(folders) { Task { await library.rescan() } }
     }
 
     // MARK: - Folders
@@ -39,6 +47,7 @@ final class LocalLibraryService: LibrarySource {
         Storage.defaults.set(unique.map(\.path), forKey: Self.foldersKey)
         let library = self.library
         Task { await library.setFolders(unique) }
+        watch()
         changed()
     }
 

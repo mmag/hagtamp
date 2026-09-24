@@ -107,6 +107,32 @@ private func fixture(_ name: String) throws -> Data {
         #expect(try Data(contentsOf: first.url) == Data(repeating: 7, count: 300_000))
     }
 
+    @Test func musicKeptOfflineLivesApartFromTheCache() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-cache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let cacheFolder = folder.appendingPathComponent("Caches"), offlineFolder = folder.appendingPathComponent("Offline")
+        let cache = AudioCache(directory: cacheFolder, offlineDirectory: offlineFolder, limit: 10_000)
+        await cache.keepOffline(keyPrefixes: ["srv-kept-"])
+        for key in ["srv-kept-mp3_128", "srv-other-mp3_128"] {
+            let source = folder.appendingPathComponent("src-\(key)")
+            try Data(repeating: 1, count: 8000).write(to: source)
+            _ = try await cache.fetch(source, key: key, fileExtension: "mp3")
+        }
+        // The kept song went to the offline folder as it finished; the cache holds the other.
+        #expect(cache.peek(prefix: "srv-kept-")?.deletingLastPathComponent().lastPathComponent == "Offline")
+        let cachedBytes = await cache.usage()
+        #expect(cachedBytes == 8000 && cache.peek("srv-other-mp3_128") != nil)
+        await cache.setLimit(0)  // evicts everything evictable
+        await cache.clear()
+        #expect(cache.peek("srv-other-mp3_128") == nil)
+        let offlineBytes = await cache.offlineUsage()
+        #expect(cache.peek(prefix: "srv-kept-") != nil && offlineBytes == 8000)
+        // No longer kept: back into the cache, where it can go like anything else.
+        await cache.keepOffline(keyPrefixes: [])
+        #expect(cache.peek(prefix: "srv-kept-")?.deletingLastPathComponent().lastPathComponent == "Caches")
+        #expect(await cache.offlineUsage() == 0)
+    }
+
     @Test func failedStreamsLeaveNothingBehind() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-cache-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }

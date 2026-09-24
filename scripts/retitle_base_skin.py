@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Builds Hagtamp's default skin from the Winamp 2.91 base skin: the
 "WINAMP" lettering in the title bars becomes "HAGTAMP" ("PLAYLIST" alone in
-the playlist, where the longer name doesn't fit), and the logo on the main
+the playlist, where the longer name doesn't fit), the logo on the main
 window's about button becomes Hagtamp's (art/logo-skin.png, from
-scripts/make_logo.py).
+scripts/make_logo.py), and the Winamp bolt on the title bar's menu button
+becomes an H.
 
 Letters are reused from the skin's own lettering (A, M, P from WINAMP; T and
 PLAYLIST from the playlist title; EQUALIZER from the equalizer title); H and
@@ -193,12 +194,54 @@ def relogo_main(main_bmp):
     return canvas.convert("RGB")
 
 
+# The menu button (TITLEBAR.BMP 0,0 and pressed 0,9; 9x9): an H in the
+# bolt's gold ("j") and its shade ("i").
+MENU_H = [
+    ".........",
+    ".jj...jj.",
+    ".ji...ji.",
+    ".ji...ji.",
+    ".jjjjjji.",
+    ".ji...ji.",
+    ".ji...ji.",
+    ".ii...ii.",
+    ".........",
+]
+
+
+def remenu(titlebar):
+    """The button sprites (pressed is what gets drawn; the normal look is part
+    of each title bar at x 33, 3 px down) in the bars' own colours."""
+    px = titlebar.load()
+    for y in range(9):
+        for x in range(9):
+            ch = MENU_H[y][x]
+            # Normal: the bar's navy. Pressed: the tan frame around a dark inside.
+            normal = (21, 21, 33)
+            pressed = (163, 148, 106) if x in (0, 8) or y in (0, 8) else (33, 40, 53)
+            gold = {"j": (236, 206, 122), "i": (154, 135, 93)}
+            px[x, y] = gold.get(ch, normal)
+            px[x, y + 9] = gold.get(ch, pressed)
+    # Title bars: active, inactive, shade active/inactive, easter egg active/inactive.
+    for oy, active in ((0, True), (15, False), (29, True), (42, False), (57, True), (72, False)):
+        colors = {"j": (239, 190, 102), "i": (154, 135, 93)} if active else {"j": (160, 129, 52), "i": (93, 80, 41)}
+        for y in range(9):
+            for x in range(9):
+                r, g, b = px[33 + x, oy + 3 + y]
+                ch = MENU_H[y][x]
+                if ch in colors:
+                    px[33 + x, oy + 3 + y] = colors[ch]
+                elif not (r < 30 and b - r >= 10):  # the old bolt: back to the bar's navy
+                    px[33 + x, oy + 3 + y] = (21, 21, 32)
+
+
 def main():
     sheets, original, out = sys.argv[1:4]
     titlebar = Image.open(f"{sheets}/TITLEBAR.png").convert("RGB")
     eqmain = Image.open(f"{sheets}/EQMAIN.png").convert("RGB")
     pledit = Image.open(f"{sheets}/PLEDIT.png").convert("RGB")
     main_bmp = relogo_main(Image.open(f"{sheets}/MAIN.png").convert("RGB"))
+    remenu(titlebar)
 
     # Letters from the skin (active title bars, before editing).
     A = read_mask(titlebar, 163, 169, 5, 11)

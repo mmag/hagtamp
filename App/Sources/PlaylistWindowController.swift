@@ -414,18 +414,7 @@ final class PlaylistWindowController: SkinWindowController {
     }
 
     private func addURL() {
-        let alert = NSAlert()
-        alert.messageText = "Add URL"
-        alert.informativeText = "Enter the address of an internet radio station (a stream, or its .pls/.m3u link)."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        field.placeholderString = "http://"
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Add")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn,
-            let url = URL(string: field.stringValue.trimmingCharacters(in: .whitespaces)), url.scheme != nil
-        else { return }
+        guard let url = WindowManager.askForURL(title: "Add URL", message: "Enter the address of an internet radio station (a stream, or its .pls/.m3u link).") else { return }
         model.editPlaylist { $0.insert([TrackInfo(url: url)]) }
     }
 

@@ -47,7 +47,7 @@ final class NavidromeService: RemoteTrackResolver {
     private(set) var server: NavidromeServer?
     private(set) var client: NavidromeClient?
     let audioCache: AudioCache
-    private let coverFolder = Storage.supportDirectory.appendingPathComponent("Cache/Covers", isDirectory: true)
+    private let coverFolder = Storage.cacheDirectory.appendingPathComponent("Covers", isDirectory: true)
 
     var quality: StreamQuality {
         didSet { Storage.defaults.set(quality.rawValue, forKey: Keys.quality) }
@@ -66,13 +66,17 @@ final class NavidromeService: RemoteTrackResolver {
         quality = StreamQuality(rawValue: defaults.string(forKey: Keys.quality) ?? "") ?? .original
         let limit = defaults.integer(forKey: Keys.cacheLimit)
         cacheLimitMB = limit > 0 ? limit : 2000
+        Self.moveOldCache()
         audioCache = AudioCache(
-            directory: Storage.supportDirectory.appendingPathComponent("Cache/Audio", isDirectory: true),
+            directory: Storage.cacheDirectory.appendingPathComponent("Audio", isDirectory: true),
+            offlineDirectory: Storage.supportDirectory.appendingPathComponent("Offline", isDirectory: true),
             limit: Int64(limit > 0 ? limit : 2000) * 1_000_000)
         try? FileManager.default.createDirectory(at: coverFolder, withIntermediateDirectories: true)
         if let url = defaults.url(forKey: Keys.url), let username = defaults.string(forKey: Keys.username) {
             let server = NavidromeServer(url: url, username: username)
             connect(server, credentials: CredentialsStore.credentials(for: Self.account(server)) ?? Self.moveFromKeychain(server))
+            protectOfflineSongs()
+            syncOffline()
         }
     }
 
@@ -103,8 +107,24 @@ final class NavidromeService: RemoteTrackResolver {
         client = credentials.map {
             NavidromeClient(
                 server: server, credentials: $0,
-                responseCache: Storage.supportDirectory.appendingPathComponent("Cache/Responses", isDirectory: true))
+                responseCache: Storage.cacheDirectory.appendingPathComponent("Responses", isDirectory: true))
         }
+    }
+
+    /// Earlier versions kept the whole cache in Application Support/Hagtamp/Cache;
+    /// it moves to Caches (music kept offline then settles into Offline).
+    private static func moveOldCache() {
+        let old = Storage.supportDirectory.appendingPathComponent("Cache", isDirectory: true)
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: old.path) else { return }
+        for name in ["Audio", "Covers", "Responses"] {
+            let from = old.appendingPathComponent(name), to = Storage.cacheDirectory.appendingPathComponent(name)
+            try? manager.createDirectory(at: to, withIntermediateDirectories: true)
+            for file in (try? manager.contentsOfDirectory(atPath: from.path)) ?? [] {
+                try? manager.moveItem(at: from.appendingPathComponent(file), to: to.appendingPathComponent(file))
+            }
+        }
+        try? manager.removeItem(at: old)
     }
 
     private static func account(_ server: NavidromeServer) -> String {
@@ -139,8 +159,18 @@ final class NavidromeService: RemoteTrackResolver {
     }
 
     func cachedFile(for url: URL) -> URL? {
-        guard let id = NavidromeTrack.songID(from: url), let key = cacheKey(id) else { return nil }
-        return audioCache.peek(key)
+        guard let id = NavidromeTrack.songID(from: url), let key = cacheKey(id), let server else { return nil }
+        // A song kept offline plays in whatever quality it was downloaded.
+        return audioCache.peek(key) ?? (offlineSongIDs.contains(id) ? audioCache.peek(prefix: "\(server.key)-\(id)-") : nil)
+    }
+
+    /// Where a song streams from in the chosen quality, and its file extension.
+    private func streamSource(_ id: String, client: NavidromeClient) async -> (url: URL, fileExtension: String) {
+        if let bitRate = quality.maxBitRate {
+            return (client.streamURL(songID: id, format: "mp3", maxBitRate: bitRate), "mp3")
+        }
+        // The extension picks the decoder.
+        return (client.streamURL(songID: id), (try? await client.song(id).suffix)?.lowercased() ?? "mp3")
     }
 
     /// Bytes a stream needs before it starts: the headers and a few seconds of audio.
@@ -151,16 +181,8 @@ final class NavidromeService: RemoteTrackResolver {
             throw NavidromeError(code: -1, message: "Navidrome is not set up (Preferences > Navidrome)")
         }
         if let cached = await audioCache.file(for: key) { return .file(cached) }
-        let source: URL
-        let fileExtension: String
-        if let bitRate = quality.maxBitRate {
-            source = client.streamURL(songID: id, format: "mp3", maxBitRate: bitRate)
-            fileExtension = "mp3"
-        } else {
-            source = client.streamURL(songID: id)
-            // The extension picks the decoder.
-            fileExtension = (try? await client.song(id).suffix)?.lowercased() ?? "mp3"
-        }
+        if let kept = cachedFile(for: url) { return .file(kept) }
+        let (source, fileExtension) = await streamSource(id, client: client)
         let stream = await audioCache.stream(source, key: key, fileExtension: fileExtension)
         let state = stream.state
         let streamable = StreamingTrack.canStream(fileExtension: fileExtension)
@@ -173,9 +195,89 @@ final class NavidromeService: RemoteTrackResolver {
         }
         if state.finished {
             if let error = state.error { throw error }
-            return .file(stream.url)
+            return .file(cachedFile(for: url) ?? stream.url)  // kept offline, it has moved
         }
         return .stream(try StreamingTrack(url: stream.url, partialFile: stream.partialFile, state: state))
+    }
+
+    // MARK: - Keep offline
+
+    /// An album or playlist whose songs stay in the cache.
+    struct OfflinePin: Codable, Hashable {
+        enum Kind: String, Codable { case album, playlist }
+        var kind: Kind
+        var id: String
+        var name: String
+        var songIDs: [String] = []
+    }
+
+    private static var pinsFile: URL { Storage.supportDirectory.appendingPathComponent("offline.json") }
+
+    /// Pins of the configured server.
+    var offlinePins: [OfflinePin] {
+        get { server.flatMap { Self.savedPins()[$0.key] } ?? [] }
+        set {
+            guard let server else { return }
+            var all = Self.savedPins()
+            all[server.key] = newValue
+            try? JSONEncoder().encode(all).write(to: Self.pinsFile, options: .atomic)
+            protectOfflineSongs()
+        }
+    }
+
+    private static func savedPins() -> [String: [OfflinePin]] {
+        (try? Data(contentsOf: pinsFile)).flatMap { try? JSONDecoder().decode([String: [OfflinePin]].self, from: $0) } ?? [:]
+    }
+
+    private var offlineSongIDs: Set<String> { Set(offlinePins.flatMap(\.songIDs)) }
+    /// Songs downloaded / to download while keeping music offline.
+    private(set) var offlineProgress: (done: Int, total: Int)?
+    private var offlineTask: Task<Void, Never>?
+
+    func isKeptOffline(_ kind: OfflinePin.Kind, id: String) -> Bool {
+        offlinePins.contains { $0.kind == kind && $0.id == id }
+    }
+
+    func setKeptOffline(_ kind: OfflinePin.Kind, id: String, name: String, _ keep: Bool) {
+        var pins = offlinePins.filter { !($0.kind == kind && $0.id == id) }
+        if keep { pins.append(OfflinePin(kind: kind, id: id, name: name)) }
+        offlinePins = pins
+        onChange?()
+        if keep { syncOffline() }
+    }
+
+    /// Refreshes the pinned song lists (playlists change) and downloads what is missing.
+    func syncOffline() {
+        guard let client, server != nil, !offlinePins.isEmpty else { return }
+        offlineTask?.cancel()
+        offlineTask = Task { [weak self] in
+            guard let self else { return }
+            var pins = self.offlinePins
+            for (i, pin) in pins.enumerated() {
+                let songs = try? await (pin.kind == .album ? client.album(pin.id).song : client.playlist(pin.id).entry)
+                if let songs { pins[i].songIDs = songs.map(\.id) }
+            }
+            guard !Task.isCancelled else { return }
+            self.offlinePins = pins
+            let missing = Array(self.offlineSongIDs.filter { self.cachedFile(for: NavidromeTrack.url(songID: $0)) == nil })
+            self.offlineProgress = missing.isEmpty ? nil : (0, missing.count)
+            self.onChange?()
+            for (done, id) in missing.enumerated() {
+                guard !Task.isCancelled, let key = self.cacheKey(id) else { break }
+                let (source, fileExtension) = await self.streamSource(id, client: client)
+                _ = try? await self.audioCache.fetch(source, key: key, fileExtension: fileExtension)
+                self.offlineProgress = (done + 1, missing.count)
+                self.onChange?()
+            }
+            self.offlineProgress = nil
+            self.onChange?()
+        }
+    }
+
+    private func protectOfflineSongs() {
+        guard let server else { return }
+        let prefixes = Set(offlineSongIDs.map { "\(server.key)-\($0)-" })
+        Task { await audioCache.keepOffline(keyPrefixes: prefixes) }
     }
 
     // MARK: - Covers

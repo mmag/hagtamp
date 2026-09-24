@@ -54,6 +54,7 @@ final class PreferencesModel {
     var statusIsError = false
     var busy = false
     var cacheUsageMB = 0
+    var offlineUsageMB = 0
 
     init(player: PlayerModel, navidrome: NavidromeService, library: LocalLibraryService) {
         self.player = player
@@ -120,7 +121,19 @@ final class PreferencesModel {
     }
 
     func refreshUsage() {
-        Task { cacheUsageMB = Int(await navidrome.audioCache.usage() / 1_000_000) }
+        Task {
+            cacheUsageMB = Int(await navidrome.audioCache.usage() / 1_000_000)
+            offlineUsageMB = Int(await navidrome.audioCache.offlineUsage() / 1_000_000)
+        }
+    }
+
+    /// "Kept offline: 2 albums, 1 playlist" (right-click one in the Navidrome window).
+    var offlineSummary: String {
+        let pins = navidrome.offlinePins
+        let albums = pins.filter { $0.kind == .album }.count, playlists = pins.count - albums
+        guard !pins.isEmpty else { return "To keep an album or playlist offline, right-click it in the Navidrome window." }
+        let parts = [(albums, "album"), (playlists, "playlist")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)\($0.0 == 1 ? "" : "s")" }
+        return "Kept offline: " + parts.joined(separator: ", ") + ", \(offlineUsageMB) MB, apart from the cache."
     }
 
     private func report(_ text: String, error: Bool) {
@@ -130,7 +143,7 @@ final class PreferencesModel {
 }
 
 struct PreferencesView: View {
-    static let size = CGSize(width: 460, height: 700)
+    static let size = CGSize(width: 460, height: 730)
 
     @Bindable var model: PreferencesModel
 
@@ -189,6 +202,7 @@ struct PreferencesView: View {
                     Spacer()
                     Button("Clear Cache") { model.clearCache() }
                 }
+                Text(model.offlineSummary).font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

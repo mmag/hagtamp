@@ -161,6 +161,18 @@ final class Counter: Sendable {
         #expect(rereads.value == 0)
     }
 
+    @Test func watcherNoticesNewFiles() async throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: music, withIntermediateDirectories: true)
+        let calls = Counter()
+        let watcher = FolderWatcher([music], latency: 0.2) { calls.add() }
+        try await Task.sleep(for: .milliseconds(300))
+        try makeTrack("New/01.flac", title: "New", artist: "N", album: "N", track: 1)
+        for _ in 0..<50 where calls.value == 0 { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(calls.value > 0)
+        withExtendedLifetime(watcher) {}
+    }
+
     @Test func removingAFolderDropsItsFiles() async throws {
         defer { try? FileManager.default.removeItem(at: folder) }
         try makeTrack("A/01.flac", title: "A1", artist: "A", album: "A", track: 1)

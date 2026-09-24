@@ -13,6 +13,16 @@ enum Storage {
         return suite
     }()
 
+    /// ~/Library/Caches/Hagtamp: what can be fetched again, and the system may clean up
+    /// (the self test's output folder + Caches).
+    static var cacheDirectory: URL {
+        let folder =
+            selfTestDirectory.map { URL(fileURLWithPath: $0, isDirectory: true).appendingPathComponent("Caches", isDirectory: true) }
+            ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Hagtamp", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
     /// ~/Library/Application Support/Hagtamp (or the self test's output folder).
     static var supportDirectory: URL {
         let folder =

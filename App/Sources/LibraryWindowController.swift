@@ -143,8 +143,8 @@ final class LibraryWindowController: SkinWindowController {
         func time(_ seconds: Int?) -> String { seconds.map { Marquee.timeString($0) } ?? "" }
         switch kind(of: list) {
         case .artists: return artists.map { [$0.name, $0.albumCount.map(String.init) ?? ""] }
-        case .albums: return albums.map { [$0.name, $0.artist ?? "", $0.year.map(String.init) ?? ""] }
-        case .playlists: return playlists.map { [$0.name, $0.trackCount.map(String.init) ?? "", time($0.duration)] }
+        case .albums: return albums.map { [offlineMark(.album($0)) + $0.name, $0.artist ?? "", $0.year.map(String.init) ?? ""] }
+        case .playlists: return playlists.map { [offlineMark(.playlist($0)) + $0.name, $0.trackCount.map(String.init) ?? "", time($0.duration)] }
         case .stations: return tracks.map { [$0.info.title ?? "", $0.info.url.absoluteString] }
         case .tracks:
             return tracks.map {
@@ -154,6 +154,11 @@ final class LibraryWindowController: SkinWindowController {
                 ]
             }
         }
+    }
+
+    /// Albums and playlists kept offline are marked with a dot.
+    private func offlineMark(_ item: LibraryItem) -> String {
+        source.isKeptOffline(item) == true ? "● " : ""
     }
 
     private func model(for list: Int) -> ListViewModel {
@@ -548,8 +553,71 @@ final class LibraryWindowController: SkinWindowController {
         return true
     }
 
+    /// On an album, playlist or track: play, enqueue and (Navidrome) keep offline;
+    /// elsewhere the main menu.
     override func contextMenuRequested(at point: SkinPoint, event: NSEvent) {
-        manager.showMainMenu(for: event, in: window.skinView)
+        guard let (list, row) = row(at: point) else {
+            manager.showMainMenu(for: event, in: window.skinView)
+            return
+        }
+        let menu = NSMenu()
+        let source = self.source, model = manager.model
+        switch kind(of: list) {
+        case .albums, .playlists:
+            let item: LibraryItem = kind(of: list) == .albums ? .album(albums[row]) : .playlist(playlists[row])
+            menu.addItem(NSMenuItem(title: "Play") { [weak self] in
+                Task { if let tracks = try? await source.tracks(of: item) { self?.play(tracks, startingAt: 0) } }
+            })
+            menu.addItem(NSMenuItem(title: "Enqueue") {
+                Task {
+                    if let tracks = try? await source.tracks(of: item) {
+                        model.add(tracks: tracks.map(\.info), tagsKnown: source.tracksHaveTags)
+                    }
+                }
+            })
+            if let kept = source.isKeptOffline(item) {
+                menu.addItem(.separator())
+                menu.addItem(NSMenuItem(title: "Keep Offline", checked: kept) { source.setKeptOffline(item, !kept) })
+            }
+        case .tracks, .stations:
+            if !(selection[list] ?? []).contains(row) {
+                selection[list] = [row]
+                changed()
+            }
+            menu.addItem(NSMenuItem(title: "Play") { [weak self] in
+                guard let self else { return }
+                self.play(self.chosenTracks, startingAt: 0)
+            })
+            menu.addItem(NSMenuItem(title: "Enqueue") { [weak self] in
+                guard let self else { return }
+                model.add(tracks: self.chosenTracks.map(\.info), tagsKnown: source.tracksHaveTags)
+            })
+        case .artists:
+            manager.showMainMenu(for: event, in: window.skinView)
+            return
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: window.skinView)
+    }
+
+    /// The list and row under a point.
+    private func row(at point: SkinPoint) -> (list: Int, row: Int)? {
+        for list in (0..<upperCount) + [Self.tracksList] where listRect(list).contains(x: point.x, y: point.y) {
+            guard let row = geometry(list).row(atY: point.y, firstVisible: scroll[list] ?? 0), row < rows(for: list).count else { return nil }
+            return (list, row)
+        }
+        return nil
+    }
+
+    /// Self test: what a right click on a row offers.
+    func contextMenuTitlesForTesting(list: Int, row: Int) -> [String] {
+        guard kind(of: list) == .albums || kind(of: list) == .playlists else { return [] }
+        let item: LibraryItem = kind(of: list) == .albums ? .album(albums[row]) : .playlist(playlists[row])
+        return ["Play", "Enqueue"] + (source.isKeptOffline(item).map { ["Keep Offline" + ($0 ? " ✓" : "")] } ?? [])
+    }
+
+    func setKeptOfflineForTesting(list: Int, row: Int, _ keep: Bool) {
+        let item: LibraryItem = kind(of: list) == .albums ? .album(albums[row]) : .playlist(playlists[row])
+        source.setKeptOffline(item, keep)
     }
 
     /// For the self test.

@@ -56,6 +56,7 @@ final class WindowManager: NSObject {
         }
     }
     private var move: (start: NSPoint, moving: [WindowBox], stationary: [WindowBox])?
+    private(set) lazy var nowPlaying = NowPlaying(model: model) { [weak self] url in await self?.cover(for: url) }
 
     init(model: PlayerModel, skin: Skin, navidrome: NavidromeService, localLibrary: LocalLibraryService) {
         self.model = model
@@ -174,6 +175,10 @@ final class WindowManager: NSObject {
 
     /// Winamp's visualization options (right-click on the visualizer, clutter bar "V").
     func showVisualizerMenu(for event: NSEvent, in view: NSView) {
+        NSMenu.popUpContextMenu(visualizerMenu(), with: event, for: view)
+    }
+
+    func visualizerMenu() -> NSMenu {
         let menu = NSMenu()
         let settings = visualizerSettings
         func choice<T: Equatable>(_ title: String, _ value: T, _ keyPath: WritableKeyPath<VisualizerSettings, T>) -> NSMenuItem {
@@ -212,13 +217,14 @@ final class WindowManager: NSObject {
         ]))
         menu.addItem(submenu("Analyzer falloff", falloffTitles.map { choice($0.0, $0.1, \.barFalloff) }))
         menu.addItem(submenu("Peaks falloff", falloffTitles.map { choice($0.0, $0.1, \.peakFalloff) }))
-        NSMenu.popUpContextMenu(menu, with: event, for: view)
+        return menu
     }
 
     private func playerChanged() {
         if model.status == .paused, pausedSince == nil { pausedSince = Date() }
         if model.status != .paused { pausedSince = nil }
         render()
+        nowPlaying.update()
     }
 
     // MARK: - Windows
@@ -464,6 +470,16 @@ final class WindowManager: NSObject {
         }
     }
 
+    // MARK: - Covers
+
+    /// A track's cover: Navidrome's, or from the file's folder or tags (read off the main thread).
+    func cover(for url: URL) async -> NSImage? {
+        if navidrome.handles(url) { return await navidrome.cover(for: url) }
+        guard url.isFileURL else { return nil }
+        let data = await Task.detached(priority: .utility) { CoverArt.imageData(for: url) }.value
+        return data.flatMap(NSImage.init(data:))
+    }
+
     // MARK: - Marquee and blinking
 
     /// Temporary text while a slider is dragged ("Volume: 78%").
@@ -538,66 +554,48 @@ final class WindowManager: NSObject {
 
     // MARK: - Menus and keys
 
-    /// Winamp's main menu (options button, clutter bar "O", right click).
-    func showMainMenu(for event: NSEvent, in view: NSView) {
-        let menu = NSMenu()
-        func item(_ title: String, _ action: Selector?, key: String = "", on: Bool = false, target: AnyObject? = nil) -> NSMenuItem {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
-            item.target = target ?? self
-            item.state = on ? .on : .off
-            return item
-        }
-        menu.addItem(item("About Hagtamp…", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp))
-        menu.addItem(.separator())
-        menu.addItem(item("Main Window", nil, on: true))
-        menu.addItem(item("Playlist Editor", #selector(togglePlaylist), on: isVisible(.playlist)))
-        menu.addItem(item("Equalizer", #selector(toggleEqualizer), on: isVisible(.equalizer)))
-        menu.addItem(item("Album Art", #selector(toggleAlbumArt), on: isVisible(.albumArt)))
-        menu.addItem(item("Local Library", #selector(toggleLocalLibrary), on: isVisible(.localLibrary)))
-        menu.addItem(item("Navidrome", #selector(toggleNavidromeLibrary), on: isVisible(.navidromeLibrary)))
-        menu.addItem(.separator())
-        let skins = NSMenu()
-        skins.addItem(item("Open Skin…", #selector(AppDelegate.openSkin(_:)), target: NSApp.delegate as AnyObject))
-        skins.addItem(item("Base Skin", #selector(AppDelegate.useBaseSkin(_:)), target: NSApp.delegate as AnyObject))
-        menu.addItem(item("Preferences…", #selector(AppDelegate.showPreferences(_:)), target: NSApp.delegate as AnyObject))
-        let skinsItem = NSMenuItem(title: "Skins", action: nil, keyEquivalent: "")
-        skinsItem.submenu = skins
-        menu.addItem(skinsItem)
-        let options = NSMenu()
-        options.addItem(item("Always On Top", #selector(toggleAlwaysOnTop), on: alwaysOnTop))
-        options.addItem(item("Double Size", #selector(toggleDoubleSize), on: doubleSize))
-        let optionsItem = NSMenuItem(title: "Options", action: nil, keyEquivalent: "")
-        optionsItem.submenu = options
-        menu.addItem(optionsItem)
-        menu.addItem(.separator())
-        menu.addItem(item("Exit", #selector(NSApplication.terminate(_:)), target: NSApp))
-        NSMenu.popUpContextMenu(menu, with: event, for: view)
-    }
-
-    /// Winamp's transport keys: Z X C V B, arrows for volume and seeking.
+    /// Winamp's keys: Z X C V B, L, J, R, S, arrows, the keypad and the
+    /// Ctrl/Shift/Alt combinations from its menus.
     func handleKey(_ event: NSEvent) -> Bool {
-        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
-        switch event.charactersIgnoringModifiers?.lowercased() {
-        case "z": model.previous()
-        case "x": model.play()
-        case "c": model.pause()
-        case "v": model.stop()
-        case "b": model.next()
-        case "l": openFiles()
-        case "j": showJumpToFile()
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        switch (flags, key) {
+        case ([], "z"): model.previous()
+        case ([], "x"): model.play()
+        case ([], "c"): model.pause()
+        case ([], "v"): model.stop()
+        case ([], "b"): model.next()
+        case ([], "l"): openFiles()
+        case ([], "j"): showJumpToFile()
+        case ([], "r"): model.repeatEnabled.toggle()
+        case ([], "s"): model.shuffle.toggle()
+        case ([.shift], "v"): model.fadeOutAndStop()
+        case ([.control], "v"): model.stopsAfterCurrent.toggle()
+        case ([.control], "z"): model.startOfList()
+        case ([.control], "l"): playURL()
+        case ([.control], "j"): jumpToTime()
+        case ([.control], "t"): timeMode = timeMode == .elapsed ? .remaining : .elapsed
+        case ([.control], "d"): toggleDoubleSize()
+        case ([.control], "a"): toggleAlwaysOnTop()
+        case ([.control], "p"): (NSApp.delegate as? AppDelegate)?.showPreferences(nil)
+        case ([.option], "s"): (NSApp.delegate as? AppDelegate)?.showSkinBrowser(nil)
         default:
+            guard flags.isEmpty || flags == [.shift] else { return false }
             switch event.keyCode {
             case 126: model.volume = min(1, model.volume + 0.02)
             case 125: model.volume = max(0, model.volume - 0.02)
             case 123: seek(bySeconds: -5)
             case 124: seek(bySeconds: 5)
+            case 83: model.skip(tracks: -10)  // keypad 1
+            case 85: model.skip(tracks: 10)  // keypad 3
             default: return false
             }
         }
         return true
     }
 
-    private func seek(bySeconds seconds: Double) {
+
+    func seek(bySeconds seconds: Double) {
         guard let duration = model.duration, duration > 0 else { return }
         model.seek(to: (model.elapsed + seconds) / duration)
     }

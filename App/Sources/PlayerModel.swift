@@ -208,6 +208,8 @@ final class PlayerModel {
     }
 
     func stop() {
+        if fadeTask != nil { cancelFade() }
+        stopsAfterCurrent = false
         loadTask?.cancel()
         prefetchTask?.cancel()
         buffering = nil
@@ -223,11 +225,66 @@ final class PlayerModel {
     func next() { step(by: 1) }
     func previous() { step(by: -1) }
 
+    /// Winamp's "10 tracks fwd/back" (numeric keypad 3 and 1).
+    func skip(tracks: Int) {
+        guard !playlist.isEmpty else { return }
+        let index = min(max(0, (currentIndex ?? 0) + tracks), playlist.count - 1)
+        if status == .stopped {
+            playlist.setCurrent(index)
+            changed()
+        } else {
+            play(trackAt: index)
+        }
+    }
+
+    /// Winamp's "Start of list" (Ctrl+Z).
+    func startOfList() {
+        guard !playlist.isEmpty else { return }
+        if status == .stopped {
+            playlist.setCurrent(0)
+            changed()
+        } else {
+            play(trackAt: 0)
+        }
+    }
+
+    /// Plays on to the end of the current track, then stops (Ctrl+V).
+    var stopsAfterCurrent = false {
+        didSet {
+            requeue()
+            changed()
+        }
+    }
+
+    private var fadeTask: Task<Void, Never>?
+
+    /// Winamp's "Stop w/ fadeout" (Shift+V): the volume falls over a second and a half.
+    func fadeOutAndStop() {
+        guard status == .playing, fadeTask == nil else { return stop() }
+        let start = volume
+        fadeTask = Task { [weak self] in
+            for step in 1...30 {
+                try? await Task.sleep(for: .milliseconds(50))
+                guard let self, !Task.isCancelled else { return }
+                self.engine.volume = start * (1 - Double(step) / 30)
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.stop()  // restores the volume for the next Play
+        }
+    }
+
+    private func cancelFade() {
+        fadeTask?.cancel()
+        fadeTask = nil
+        engine.volume = volume
+    }
+
     /// Plays an entry. Remote entries (Navidrome) start once enough of them
     /// has downloaded, showing the buffering progress, and keep downloading
     /// into the cache as they play. Entries that fail are skipped, at most
     /// once around the list.
     func play(trackAt index: Int, attempts: Int = 0) {
+        if fadeTask != nil { cancelFade() }
         guard playlist.entries.indices.contains(index), attempts < playlist.count else {
             stop()
             return
@@ -316,7 +373,7 @@ final class PlayerModel {
         if !engine.seek(to: fraction) {
             // A stream can't seek; once its download is complete the cached file takes over.
             guard let index = currentIndex, resolver(for: playlist[index].url) != nil,
-                let file = localFiles[playlist[index].id], FileManager.default.fileExists(atPath: file.path),
+                let file = resolver(for: playlist[index].url)?.cachedFile(for: playlist[index].url),
                 (try? engine.play(file, from: fraction)) != nil
             else { return }
             requeue(clearingQueue: false)
@@ -351,7 +408,7 @@ final class PlayerModel {
         if clearingQueue { engine.clearQueue() }
         prefetchTask?.cancel()
         followingLiveID = nil
-        guard let next = followingIndex() else {
+        guard !stopsAfterCurrent, let next = followingIndex() else {
             queuedID = nil
             return
         }
@@ -480,6 +537,7 @@ final class PlayerModel {
                 status = .stopped
                 queuedID = nil
                 streamTitle = nil
+                if stopsAfterCurrent { stopsAfterCurrent = false }
             }
         case .error(let message):
             onError?(message)
