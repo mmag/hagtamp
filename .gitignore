@@ -1,13 +1,22 @@
-node_modules/
-dist/
 .DS_Store
 
-# Tauri build artifacts
-src-tauri/target/
-src-tauri/WixTools/
+# Xcode / SwiftPM
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+.build/
+.swiftpm/
+build/
 
-# Vite
-*.local
+# Reference app (closed-source binary, kept locally only)
+reamp/
+
+# Skin Museum corpus for golden tests (scripts/fetch_skin_corpus.py)
+.corpus/
+
+# Render/diff output
+.artifacts/
 
 # Editor
 .vscode/
@@ -16,8 +25,3 @@ src-tauri/WixTools/
 # env
 .env
 .env.*
-
-
-# Added by cargo
-
-/target

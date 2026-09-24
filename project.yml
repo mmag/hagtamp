@@ -1,0 +1,50 @@
+name: Hagtamp
+options:
+  bundleIdPrefix: app.hagtamp
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+packages:
+  HagtampKit:
+    path: Packages/HagtampKit
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+targets:
+  Hagtamp:
+    type: application
+    platform: macOS
+    sources:
+      - App/Sources
+    dependencies:
+      - package: HagtampKit
+        product: SkinKit
+      - package: HagtampKit
+        product: SkinRenderer
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleName: Hagtamp
+        CFBundleDisplayName: Hagtamp
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "14.0"
+        LSApplicationCategoryType: public.app-category.music
+        NSPrincipalClass: NSApplication
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Winamp Classic Skin
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            CFBundleTypeExtensions: [wsz]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.hagtamp.Hagtamp
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: NO
+        SWIFT_STRICT_CONCURRENCY: complete
