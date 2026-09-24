@@ -280,6 +280,13 @@ final class NavidromeService: RemoteTrackResolver {
         Task { await audioCache.keepOffline(keyPrefixes: prefixes) }
     }
 
+    // MARK: - Lyrics
+
+    func lyrics(for track: TrackInfo) async -> Lyrics? {
+        guard let id = NavidromeTrack.songID(from: track.url), let client else { return nil }
+        return try? await client.lyrics(songID: id, artist: track.artist, title: track.title)
+    }
+
     // MARK: - Covers
 
     /// The cover of a song (via its album), cached on disk.

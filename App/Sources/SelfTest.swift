@@ -35,6 +35,7 @@ enum SelfTest {
             await resumeSteps(manager)
             await playlistSteps(manager, snap: snap)
             await localLibrarySteps(manager, snap: snap)
+            await lyricsSteps(manager, snap: snap)
             snapPreferences(to: output.appendingPathComponent("preferences-library.png"))
             await navidromeSteps(manager, snap: snap)
             uiSteps(manager, snap: snap)
@@ -184,6 +185,29 @@ enum SelfTest {
 
     /// Library browsing and playback against scripts/navidrome_dev.sh, when it runs.
     /// HAGTAMP_SELFTEST_NAVIDROME points elsewhere (e.g. a throttling proxy, to stream for real).
+    /// A local track with an .lrc next to it (made-up words): the current line
+    /// follows the song, a click on a line jumps there.
+    private static func lyricsSteps(_ manager: WindowManager, snap: (String) -> Void) async {
+        let model = manager.model
+        guard let tone = makeTone(frequency: 520, name: "lyrics", seconds: 6) else { return }
+        try? """
+            [00:00.30]Test words for the first line
+            [00:01.50]A second made-up line that is long enough to need wrapping in the window
+            [00:03.00]Third line
+            [00:04.50]Last line of the test
+            """.write(to: tone.deletingPathExtension().appendingPathExtension("lrc"), atomically: true, encoding: .utf8)
+        model.load([tone], play: true)
+        manager.toggleLyrics()
+        await wait("lyrics loaded") { manager.lyrics.summary.hasPrefix("lines=4 synced=true") }
+        await wait("lyrics follow the song", seconds: 4) { manager.lyrics.summary.contains("current=1 ") }
+        print("selftest: lyrics \(manager.lyrics.summary)")
+        snap("lyrics")
+        manager.lyrics.clickLineForTesting(3)
+        await wait("lyrics click jumps") { model.elapsed >= 4.4 && manager.lyrics.summary.contains("current=3 ") }
+        model.stop()
+        manager.toggleLyrics()
+    }
+
     /// With the option on, a relaunch continues the track where it was; Stop forgets the spot.
     private static func resumeSteps(_ manager: WindowManager) async {
         let model = manager.model
@@ -462,6 +486,11 @@ enum SelfTest {
 
         library.playAllForTesting()
         await wait("buffering done", seconds: 30) { model.buffering == nil && model.status == .playing && model.elapsed > 0.3 }
+        // Tone 1 has made-up synced lyrics on the dev server (a .lrc next to it).
+        manager.toggleLyrics()
+        await wait("server lyrics", seconds: 10) { manager.lyrics.summary.hasPrefix("lines=6 synced=true") }
+        print("selftest: navidrome lyrics \(manager.lyrics.summary)")
+        manager.toggleLyrics()
         // Not seekable yet means it started as a stream, before the download completed.
         print("selftest: navidrome playing index=\(model.currentIndex ?? -1) status=\(model.status) elapsed=\(String(format: "%.2f", model.elapsed)) seekable=\(model.engine.canSeek) title=\(model.displayedTrack?.displayName ?? "-") marquee=\(manager.marqueeText)")
         // Seeking works once the track is in the cache (a stream can't seek; the cached file takes over).
@@ -589,7 +618,7 @@ enum SelfTest {
 
     /// All visible windows drawn at their screen positions over a grey backdrop.
     private static func snapshot(_ manager: WindowManager) -> Bitmap {
-        let windows = [manager.main, manager.equalizer, manager.playlist, manager.albumArt, manager.navidromeLibrary, manager.localLibrary].filter { $0.window.isVisible }
+        let windows = [manager.main, manager.equalizer, manager.playlist, manager.albumArt, manager.navidromeLibrary, manager.localLibrary, manager.lyrics].filter { $0.window.isVisible }
         let union = windows.map(\.window.frame).reduce(NSRect.null) { $0.union($1) }.insetBy(dx: -8, dy: -8)
         var canvas = Bitmap(width: Int(union.width), height: Int(union.height), fill: PixelColor(rgb: 0x5A5A5A))
         for c in windows {
@@ -613,7 +642,7 @@ enum SelfTest {
     }
 
     private static func layout(_ manager: WindowManager) -> String {
-        [("main", manager.main), ("eq", manager.equalizer), ("pl", manager.playlist), ("art", manager.albumArt), ("nd", manager.navidromeLibrary), ("local", manager.localLibrary)].map { name, c in
+        [("main", manager.main), ("eq", manager.equalizer), ("pl", manager.playlist), ("art", manager.albumArt), ("nd", manager.navidromeLibrary), ("local", manager.localLibrary), ("lyrics", manager.lyrics)].map { name, c in
             let f = c.window.frame
             return c.window.isVisible ? "\(name)=\(Int(f.minX)),\(Int(f.maxY)) \(Int(f.width))x\(Int(f.height))" : "\(name)=hidden"
         }.joined(separator: " ")

@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import PlayerCore
 
 /// Connection settings; the password lives in the Keychain, not here.
 public struct NavidromeServer: Codable, Equatable, Sendable {
@@ -155,6 +156,44 @@ public final class NavidromeClient: Sendable {
             case .artist(let id): ["artistId": id]
             }
         _ = try await call(starred ? "star" : "unstar", params, cacheable: false)
+    }
+
+    /// A song's lyrics: synced when the server has them (OpenSubsonic's
+    /// getLyricsBySongId, which lyrics plugins answer too), else plain text
+    /// from the older getLyrics (by artist and title). Cached for offline use.
+    public func lyrics(songID: String, artist: String?, title: String?) async throws -> Lyrics? {
+        if let body = try? await call("getLyricsBySongId", ["id": songID], cacheable: true),
+            let lyrics = Self.structuredLyrics(in: body)
+        {
+            return lyrics
+        }
+        guard let artist, let title else { return nil }
+        let body = try await call("getLyrics", ["artist": artist, "title": title], cacheable: true)
+        return ((body["lyrics"] as? [String: Any])?["value"] as? String).flatMap(Lyrics.parse)
+    }
+
+    /// The best of `lyricsList.structuredLyrics`: synced over plain.
+    static func structuredLyrics(in body: [String: Any]) -> Lyrics? {
+        guard let list = (body["lyricsList"] as? [String: Any])?["structuredLyrics"] as? [[String: Any]] else { return nil }
+        let best = list.first { $0["synced"] as? Bool == true } ?? list.first
+        guard let best, let lines = best["line"] as? [[String: Any]], !lines.isEmpty else { return nil }
+        let synced = best["synced"] as? Bool == true
+        // Like LRC's [offset:], a positive offset brings the words earlier.
+        let offset = Double(best["offset"] as? Int ?? 0) / 1000
+        return Lyrics(lines: lines.map { line in
+            let start = (line["start"] as? Int).map { max(0, Double($0) / 1000 - offset) }
+            return Lyrics.Line(start: synced ? start : nil, text: line["value"] as? String ?? "")
+        })
+    }
+
+    /// Rescans the music folders (admins only); for tests and scripts.
+    public func startScan() async throws {
+        _ = try await call("startScan", ["fullScan": "true"], cacheable: false)
+    }
+
+    public func isScanning() async throws -> Bool {
+        let body = try await call("getScanStatus", cacheable: false)
+        return (body["scanStatus"] as? [String: Any])?["scanning"] as? Bool ?? false
     }
 
     /// Internet radio stations configured on the server.

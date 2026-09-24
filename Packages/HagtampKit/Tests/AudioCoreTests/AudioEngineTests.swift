@@ -84,3 +84,18 @@ func makeTone(seconds: Double = 1, frequency: Double = 1000, sampleRate: Double 
         #expect(events.contains { if case .nowPlaying(let u) = $0 { return u == url } else { return false } })
     }
 }
+
+@Suite struct LocalLyricsTests {
+    @Test func sidecarLRCComesFirst() throws {
+        let url = try makeTone(seconds: 1)
+        let lrc = url.deletingPathExtension().appendingPathExtension("lrc")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: lrc)
+        }
+        #expect(Lyrics.local(for: url) == nil)
+        try "[00:00.20]made up line\n[00:00.70]another one".write(to: lrc, atomically: true, encoding: .utf8)
+        let lyrics = try #require(Lyrics.local(for: url))
+        #expect(lyrics.isSynced && lyrics.lines.map(\.text) == ["made up line", "another one"])
+    }
+}

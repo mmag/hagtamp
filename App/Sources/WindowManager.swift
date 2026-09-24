@@ -29,7 +29,8 @@ final class WindowManager: NSObject {
     private(set) lazy var albumArt = AlbumArtWindowController(manager: self)
     private(set) lazy var navidromeLibrary = LibraryWindowController(id: .navidromeLibrary, source: navidrome, manager: self)
     private(set) lazy var localLibrary = LibraryWindowController(id: .localLibrary, source: localLibraryService, manager: self)
-    private var controllers: [SkinWindowController] { [main, equalizer, playlist, albumArt, navidromeLibrary, localLibrary] }
+    private(set) lazy var lyrics = LyricsWindowController(manager: self)
+    private var controllers: [SkinWindowController] { [main, equalizer, playlist, albumArt, navidromeLibrary, localLibrary, lyrics] }
     /// Where extra windows kept their visibility before the saved layout
     /// (read once, when there is no layout yet).
     private static let visibilityKeys: [WindowID: String] = [
@@ -83,6 +84,7 @@ final class WindowManager: NSObject {
         case .albumArt: albumArt
         case .navidromeLibrary: navidromeLibrary
         case .localLibrary: localLibrary
+        case .lyrics: lyrics
         }
     }
 
@@ -272,9 +274,17 @@ final class WindowManager: NSObject {
     @objc func toggleAlbumArt() { toggleExtra(albumArt) }
     @objc func toggleNavidromeLibrary() { toggleExtra(navidromeLibrary) }
     @objc func toggleLocalLibrary() { toggleExtra(localLibrary) }
+    @objc func toggleLyrics() {
+        if !isVisible(.lyrics) { lyrics.reloadMissing() }
+        toggleExtra(lyrics)
+    }
 
     func hideLibrary(_ library: LibraryWindowController) {
-        if isVisible(library.id) { toggleExtra(library) }
+        hideExtra(library)
+    }
+
+    func hideExtra(_ c: SkinWindowController) {
+        if isVisible(c.id) { toggleExtra(c) }
     }
 
     /// Shows or hides a window beyond the classic three, placing it on first showing.
@@ -420,7 +430,7 @@ final class WindowManager: NSObject {
             }
             y = box(c).bottom
         }
-        for c in [albumArt, navidromeLibrary, localLibrary] as [SkinWindowController]
+        for c in [albumArt, navidromeLibrary, localLibrary, lyrics] as [SkinWindowController]
         where visible.contains(c.id) && (!placed.contains(c.id) || !placed.contains(.main)) {
             placeBesideMain(c)
         }
@@ -478,6 +488,16 @@ final class WindowManager: NSObject {
         guard url.isFileURL else { return nil }
         let data = await Task.detached(priority: .utility) { CoverArt.imageData(for: url) }.value
         return data.flatMap(NSImage.init(data:))
+    }
+
+    // MARK: - Lyrics
+
+    /// A track's lyrics: Navidrome's (plugins included), or a local .lrc / lyrics tag.
+    func lyrics(for track: TrackInfo) async -> Lyrics? {
+        if navidrome.handles(track.url) { return await navidrome.lyrics(for: track) }
+        guard track.url.isFileURL else { return nil }
+        let url = track.url
+        return await Task.detached(priority: .utility) { Lyrics.local(for: url) }.value
     }
 
     // MARK: - Marquee and blinking

@@ -38,6 +38,20 @@ private func fixture(_ name: String) throws -> Data {
         #expect(try JSONDecoder().decode(NavidromeCredentials.self, from: data) == saved)
     }
 
+    @Test func structuredLyricsPreferSyncedOnes() throws {
+        let body: [String: Any] = [
+            "lyricsList": [
+                "structuredLyrics": [
+                    ["synced": false, "line": [["value": "plain words"]]],
+                    ["synced": true, "offset": 250, "line": [["start": 1000, "value": "one"], ["start": 3500, "value": "two"]]],
+                ]
+            ]
+        ]
+        let lyrics = try #require(NavidromeClient.structuredLyrics(in: body))
+        #expect(lyrics.lines == [Lyrics.Line(start: 0.75, text: "one"), Lyrics.Line(start: 3.25, text: "two")])
+        #expect(NavidromeClient.structuredLyrics(in: ["lyricsList": [String: Any]()]) == nil)
+    }
+
     @Test func serverErrorsBecomeNavidromeErrors() throws {
         #expect(throws: NavidromeError(code: 40, message: "Wrong username or password")) {
             _ = try NavidromeClient.body(of: try fixture("wrongPassword"))
@@ -184,6 +198,14 @@ private func fixture(_ name: String) throws -> Data {
         #expect(station.streamUrl == "http://127.0.0.1:9/stream.mp3")
         try await client.deleteRadioStation(id: station.id)
         #expect(try await client.radioStations().contains { $0.name == name } == false)
+    }
+
+    /// scripts/navidrome_dev.sh puts a made-up .lrc next to Alpha Tones' Tone 1.
+    @Test func syncedLyricsFromTheServer() async throws {
+        let song = try #require(try await client.search("Tone 1").song?.first { $0.artist == "Alpha Tones" && $0.title == "Tone 1" })
+        let lyrics = try #require(try await client.lyrics(songID: song.id, artist: song.artist, title: song.title))
+        #expect(lyrics.isSynced)
+        #expect(lyrics.lines.first?.start == 0.5 && lyrics.lines.count == 6)
     }
 
     @Test func aSavedTokenWorksAgainstTheServer() async throws {

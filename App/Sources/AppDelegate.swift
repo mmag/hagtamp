@@ -127,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(target: windows, "Playlist Editor", #selector(WindowManager.togglePlaylist), key: "e", modifiers: .option)
         viewMenu.addItem(target: windows, "Equalizer", #selector(WindowManager.toggleEqualizer), key: "g", modifiers: .option)
         viewMenu.addItem(target: windows, "Album Art", #selector(WindowManager.toggleAlbumArt), key: "a", modifiers: .option)
+        viewMenu.addItem(target: windows, "Lyrics", #selector(WindowManager.toggleLyrics), key: "y", modifiers: .option)
         viewMenu.addItem(target: windows, "Local Library", #selector(WindowManager.toggleLocalLibrary), key: "m", modifiers: .option)
         viewMenu.addItem(target: windows, "Navidrome", #selector(WindowManager.toggleNavidromeLibrary), key: "l", modifiers: .option)
         viewMenu.addItem(.separator())

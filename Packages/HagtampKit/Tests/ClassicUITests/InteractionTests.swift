@@ -134,3 +134,27 @@ import Testing
         #expect(WindowDocking.isReachable(WindowBox(.main, x: 1400, y: 100, width: 275, height: 116), screens: [screen]))
     }
 }
+
+@Suite struct LyricsLayoutTests {
+    let font = "Arial"
+
+    @Test func longLinesWrapAndRowsKnowTheirLine() {
+        let lines = ["short", "a much longer made up line that cannot possibly fit into a narrow window at all", "", "end"]
+        let layout = LyricsLayout(lines: lines, width: 275, height: 116, fontName: font)
+        #expect(layout.rows.first?.text == "short")
+        #expect(layout.rows.filter { $0.line == 1 }.count > 1)
+        #expect(layout.rows.map(\.line).last == 3)
+        #expect(layout.rows.allSatisfy { SystemText.width($0.text, fontName: font) <= layout.area.width })
+    }
+
+    @Test func centeringAndClicks() {
+        let lines = (1...30).map { "line \($0)" }
+        let layout = LyricsLayout(lines: lines, width: 275, height: 116, fontName: font)
+        let first = layout.firstRow(centering: 15)
+        #expect(first == 15 - layout.visibleRows / 2)
+        #expect(layout.firstRow(centering: 0) == 0)
+        #expect(layout.firstRow(centering: 29) == layout.maxFirstRow)
+        #expect(layout.line(atY: layout.area.y + 1, firstRow: first) == first)
+        #expect(layout.line(atY: layout.area.y - 1, firstRow: first) == nil)
+    }
+}

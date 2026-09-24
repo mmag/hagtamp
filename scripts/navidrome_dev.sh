@@ -39,6 +39,19 @@ if [ ! -d "$MUSIC" ]; then
     ffmpeg -loglevel error -f lavfi -i "color=c=0x3060c0:s=300x300" -frames:v 1 "$MUSIC/Alpha Tones/Alpha Tones Vol. 1/cover.jpg"
 fi
 
+# Synced lyrics for one track (made-up words), for the lyrics window.
+LRC="$MUSIC/Alpha Tones/Alpha Tones Vol. 1/01 Tone 1.lrc"
+if [ -d "$(dirname "$LRC")" ] && [ ! -f "$LRC" ]; then
+    cat > "$LRC" <<'LYRICS'
+[00:00.50]Hagtamp test lyrics, line one
+[00:04.00]A steady tone at four seconds
+[00:08.00]Line three, still on pitch
+[00:12.00]Halfway through the test
+[00:16.00]Almost done now
+[00:20.00]The last line of the tone
+LYRICS
+fi
+
 mkdir -p "$ROOT/data"
 echo "Starting Navidrome on port $PORT"
 ND_MUSICFOLDER="$MUSIC" ND_DATAFOLDER="$ROOT/data" ND_PORT=$PORT ND_LOGLEVEL=warn \
