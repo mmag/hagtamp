@@ -15,7 +15,12 @@ import ClassicUI
 let usage = """
     usage: skintool info <skin>
            skintool render <skin> <out.png> [scale]
+           skintool sheets <skin> <out-dir>
+           skintool gen <skin> <out.png> [title]
            skintool compare <corpus-dir> [out-dir]
+
+    compare uses skins/winamp.wsz (the original Winamp base skin) for missing
+    bitmaps, like Webamp did when taking the screenshots.
     """
 
 func fail(_ message: String) -> Never {
@@ -33,6 +38,8 @@ let webampBugs: [String: String] = [
 ]
 
 func compare(corpus: URL, output: URL?) throws {
+    let original = URL(fileURLWithPath: "skins/winamp.wsz")
+    let fallback = (try? Skin.load(contentsOf: original)) ?? .base
     let skinsDir = corpus.appendingPathComponent("skins")
     let shotsDir = corpus.appendingPathComponent("screenshots")
     var names: [String: String] = [:]
@@ -65,7 +72,7 @@ func compare(corpus: URL, output: URL?) throws {
         }
         let skin: Skin
         do {
-            skin = try Skin.load(contentsOf: skinsDir.appendingPathComponent(file))
+            skin = try Skin.load(contentsOf: skinsDir.appendingPathComponent(file), fallback: fallback)
         } catch {
             failures.append("\(label): \(error)")
             continue
@@ -120,6 +127,30 @@ case "render":
     let skin = try Skin.load(contentsOf: URL(fileURLWithPath: arguments[1]))
     let scale = arguments.count > 3 ? Int(arguments[3]) ?? 1 : 1
     try ReferenceScene.render(skin).scaled(by: scale).pngData().write(to: URL(fileURLWithPath: arguments[2]))
+
+case "sheets":
+    // Decoded bitmaps as PNG, for inspection and editing.
+    guard arguments.count == 3 else { fail(usage) }
+    let skin = try Skin.load(contentsOf: URL(fileURLWithPath: arguments[1]))
+    let out = URL(fileURLWithPath: arguments[2])
+    try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+    for (sheet, bitmap) in skin.sheets where !skin.inheritedSheets.contains(sheet) {
+        try bitmap.pngData().write(to: out.appendingPathComponent("\(sheet.rawValue).png"))
+    }
+
+case "gen":
+    // A generic window frame (album art, media library) at 2x, focused and not.
+    guard arguments.count >= 3 else { fail(usage) }
+    let skin = try Skin.load(contentsOf: URL(fileURLWithPath: arguments[1]))
+    var state = GenWindowState(title: arguments.count > 3 ? arguments[3] : "Album Art")
+    state.heightSteps = 6
+    let inactive = GenWindowRenderer.render(skin, state)
+    state.focused = true
+    let active = GenWindowRenderer.render(skin, state)
+    var sheet = Bitmap(width: active.width * 2 + 8, height: active.height, fill: PixelColor(rgb: 0x404040))
+    sheet.draw(active, from: active.bounds, atX: 0, y: 0)
+    sheet.draw(inactive, from: inactive.bounds, atX: active.width + 8, y: 0)
+    try sheet.scaled(by: 2).pngData().write(to: URL(fileURLWithPath: arguments[2]))
 
 case "compare":
     guard arguments.count >= 2 else { fail(usage) }

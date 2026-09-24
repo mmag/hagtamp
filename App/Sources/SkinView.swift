@@ -17,7 +17,7 @@ protocol SkinViewDelegate: AnyObject {
     /// Skin cursor for a point; nil shows the system arrow.
     func cursor(at point: SkinPoint) -> SkinCursorName?
     func keyDown(_ event: NSEvent) -> Bool
-    func filesDropped(_ urls: [URL])
+    func filesDropped(_ urls: [URL], at point: SkinPoint)
 }
 
 /// Shows a window bitmap pixel-exactly: one skin pixel is one point
@@ -122,7 +122,9 @@ final class SkinView: NSView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let urls = droppedURLs(sender)
         guard !urls.isEmpty else { return false }
-        delegate?.filesDropped(urls)
+        let p = convert(sender.draggingLocation, from: nil)
+        let scale = bounds.width / CGFloat(bitmapWidth)
+        delegate?.filesDropped(urls, at: SkinPoint(x: Int(p.x / scale), y: Int(p.y / scale)))
         return true
     }
 

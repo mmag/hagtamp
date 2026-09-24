@@ -9,7 +9,8 @@ final class MenuAction: NSObject {
         self.handler = handler
     }
 
-    @objc func perform(_ sender: Any?) {
+    /// Not `perform(_:)`: that name resolves to NSObject's `performSelector:`.
+    @objc func runHandler(_ sender: Any?) {
         handler()
     }
 }
@@ -19,7 +20,7 @@ extension NSMenuItem {
     @MainActor
     convenience init(title: String, checked: Bool = false, enabled: Bool = true, handler: @escaping @MainActor () -> Void) {
         let action = MenuAction(handler)
-        self.init(title: title, action: #selector(MenuAction.perform(_:)), keyEquivalent: "")
+        self.init(title: title, action: #selector(MenuAction.runHandler(_:)), keyEquivalent: "")
         target = action
         representedObject = action  // menu items hold targets weakly
         state = checked ? .on : .off

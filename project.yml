@@ -41,7 +41,7 @@ targets:
         LSApplicationCategoryType: public.app-category.music
         NSPrincipalClass: NSApplication
         CFBundleDocumentTypes:
-          - CFBundleTypeName: Winamp Classic Skin
+          - CFBundleTypeName: Hagtamp Skin
             CFBundleTypeRole: Viewer
             LSHandlerRank: Alternate
             CFBundleTypeExtensions: [wsz]

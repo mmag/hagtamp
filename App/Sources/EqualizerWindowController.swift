@@ -112,7 +112,7 @@ final class EqualizerWindowController: SkinWindowController {
     // MARK: - Presets
 
     /// Winamp's PRESETS menu: Load / Save / Delete.
-    private func presetsMenu() -> NSMenu {
+    func presetsMenu() -> NSMenu {
         let model = manager.model
         let menu = NSMenu()
         menu.autoenablesItems = false

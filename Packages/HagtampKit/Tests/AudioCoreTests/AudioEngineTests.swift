@@ -3,6 +3,7 @@ import Foundation
 import Testing
 
 @testable import AudioCore
+import PlayerCore
 
 /// Writes a stereo 16-bit WAV with a sine tone.
 func makeTone(seconds: Double = 1, frequency: Double = 1000, sampleRate: Double = 44100) throws -> URL {
@@ -67,6 +68,15 @@ func makeTone(seconds: Double = 1, frequency: Double = 1000, sampleRate: Double 
         try await Task.sleep(for: .milliseconds(400))
         let attenuated = engine.samples.latest(1024).map(abs).max() ?? 0
         #expect(attenuated < peak / 2)
+
+        // Band gains reach the audio too: cut every band, keep the preamp flat.
+        engine.setEqualizer(enabled: true, preamp: 0.5, bands: Array(repeating: 0.5, count: 10))
+        try await Task.sleep(for: .milliseconds(400))
+        let flat = engine.samples.latest(1024).map(abs).max() ?? 0
+        engine.setEqualizer(enabled: true, preamp: 0.5, bands: Array(repeating: 0, count: 10))
+        try await Task.sleep(for: .milliseconds(400))
+        let cut = engine.samples.latest(1024).map(abs).max() ?? 0
+        #expect(cut < flat / 2, "bands: flat \(flat), cut \(cut)")
 
         engine.stop()
         try await Task.sleep(for: .milliseconds(100))

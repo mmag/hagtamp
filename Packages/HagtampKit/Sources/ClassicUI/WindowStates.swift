@@ -38,7 +38,7 @@ public struct MainWindowState: Sendable {
     /// Nil while stopped; hidden during the "off" phase of the pause blink.
     public var time: TimeDisplay?
     /// Text of the scrolling song title display (already formatted).
-    public var marqueeText = "Winamp 2.91"
+    public var marqueeText = "Hagtamp"
     /// Horizontal scroll of the marquee in pixels.
     public var marqueeOffset = 0
     public var kbps: String?

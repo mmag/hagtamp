@@ -22,8 +22,10 @@ final class WindowManager: NSObject {
     private(set) lazy var main = MainWindowController(manager: self)
     private(set) lazy var equalizer = EqualizerWindowController(manager: self)
     private(set) lazy var playlist = PlaylistWindowController(manager: self)
-    private var controllers: [SkinWindowController] { [main, equalizer, playlist] }
-    private var visible: Set<WindowID> = [.main, .equalizer, .playlist]
+    private(set) lazy var albumArt = AlbumArtWindowController(manager: self)
+    private var controllers: [SkinWindowController] { [main, equalizer, playlist, albumArt] }
+    private var visible: Set<WindowID> =
+        Storage.defaults.bool(forKey: "albumArtVisible") ? [.main, .equalizer, .playlist, .albumArt] : [.main, .equalizer, .playlist]
 
     private var uiTimer: Timer?
     private var displayLink: CADisplayLink?
@@ -34,7 +36,7 @@ final class WindowManager: NSObject {
     private(set) var visualizerFrame: Bitmap?
     var visualizerSettings = VisualizerSettings() {
         didSet {
-            UserDefaults.standard.set(try? JSONEncoder().encode(visualizerSettings), forKey: "visualizer")
+            Storage.defaults.set(try? JSONEncoder().encode(visualizerSettings), forKey: "visualizer")
             if visualizerSettings.mode == .off { visualizerFrame = nil }
             renderMain()
         }
@@ -47,7 +49,7 @@ final class WindowManager: NSObject {
         super.init()
         cursors.load(skin)
         model.onChange = { [weak self] in self?.playerChanged() }
-        if let data = UserDefaults.standard.data(forKey: "visualizer"),
+        if let data = Storage.defaults.data(forKey: "visualizer"),
             let saved = try? JSONDecoder().decode(VisualizerSettings.self, from: data)
         {
             visualizerSettings = saved
@@ -61,23 +63,27 @@ final class WindowManager: NSObject {
         case .main: main
         case .equalizer: equalizer
         case .playlist: playlist
+        case .albumArt: albumArt
         }
     }
 
     // MARK: - Lifecycle
 
-    /// Stacks the windows like Winamp's default layout and shows them.
+    /// Stacks the windows like Winamp's default layout (album art docked to
+    /// the right of the main window) and shows them.
     func start() {
         let visibleFrame = NSScreen.main?.visibleFrame ?? .zero
-        var top = Int(Self.primaryMaxY - visibleFrame.maxY) + 80
+        let top = Int(Self.primaryMaxY - visibleFrame.maxY) + 80
+        var y = top
         let left = Int(visibleFrame.minX) + 80
-        for c in controllers {
+        for c in [main, equalizer, playlist] as [SkinWindowController] {
             let (w, h) = c.pixelSize()
-            setFrame(c, WindowBox(c.id, x: left, y: top, width: w * scale, height: h * scale))
-            top += h * scale
+            setFrame(c, WindowBox(c.id, x: left, y: y, width: w * scale, height: h * scale))
+            y += h * scale
         }
+        placeAlbumArtBesideMain()
         render()
-        for c in controllers.reversed() { c.window.orderFront(nil) }
+        for c in controllers.reversed() where visible.contains(c.id) { c.window.orderFront(nil) }
         main.window.makeKeyAndOrderFront(nil)
 
         let timer = Timer(timeInterval: Marquee.stepInterval, repeats: true) { [weak self] _ in
@@ -241,6 +247,20 @@ final class WindowManager: NSObject {
     }
 
     @objc func toggleEqualizer() { setVisible(.equalizer, !isVisible(.equalizer)) }
+
+    @objc func toggleAlbumArt() {
+        let show = !isVisible(.albumArt)
+        if show && albumArt.window.frame.width == 0 { placeAlbumArtBesideMain() }
+        setVisible(.albumArt, show)
+        Storage.defaults.set(show, forKey: "albumArtVisible")
+    }
+
+    /// Docks the album art window to the right of the main window.
+    private func placeAlbumArtBesideMain() {
+        let mainBox = box(main)
+        let (w, h) = albumArt.pixelSize()
+        setFrame(albumArt, WindowBox(.albumArt, x: mainBox.right, y: mainBox.y, width: w * scale, height: h * scale))
+    }
     @objc func togglePlaylist() { setVisible(.playlist, !isVisible(.playlist)) }
 
     // MARK: - Moving windows
@@ -315,11 +335,15 @@ final class WindowManager: NSObject {
     private var marqueeTrackText = ""
     private var pausedSince: Date?
 
+    /// Shown by the marquee when nothing is loaded.
+    static let idleTitle = "Hagtamp " + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
+
     var marqueeText: String {
         if let marqueeMessage { return marqueeMessage }
-        guard let track = model.currentTrack else { return "Winamp 2.91" }
+        guard let track = model.displayedTrack else { return Self.idleTitle }
         let length = model.duration.map { " (\(Marquee.timeString(Int($0))))" } ?? ""
-        return "\(model.currentIndex + 1). \(track.displayName)\(length)"
+        let number = model.currentIndex.map { "\($0 + 1). " } ?? ""
+        return "\(number)\(track.displayName)\(length)"
     }
 
     var marqueeOffset: Int {
@@ -374,11 +398,12 @@ final class WindowManager: NSObject {
             item.state = on ? .on : .off
             return item
         }
-        menu.addItem(item("Nullsoft Winamp…", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp))
+        menu.addItem(item("About Hagtamp…", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp))
         menu.addItem(.separator())
         menu.addItem(item("Main Window", nil, on: true))
         menu.addItem(item("Playlist Editor", #selector(togglePlaylist), on: isVisible(.playlist)))
         menu.addItem(item("Equalizer", #selector(toggleEqualizer), on: isVisible(.equalizer)))
+        menu.addItem(item("Album Art", #selector(toggleAlbumArt), on: isVisible(.albumArt)))
         menu.addItem(.separator())
         let skins = NSMenu()
         skins.addItem(item("Open Skin…", #selector(AppDelegate.openSkin(_:)), target: NSApp.delegate as AnyObject))
@@ -407,6 +432,7 @@ final class WindowManager: NSObject {
         case "v": model.stop()
         case "b": model.next()
         case "l": openFiles()
+        case "j": showJumpToFile()
         default:
             switch event.keyCode {
             case 126: model.volume = min(1, model.volume + 0.02)
@@ -424,19 +450,18 @@ final class WindowManager: NSObject {
         model.seek(to: (model.elapsed + seconds) / duration)
     }
 
-    /// Skins are applied; audio replaces the playlist and plays (dropped on
-    /// the playlist it is appended instead).
-    func filesDropped(_ urls: [URL], on id: WindowID) {
+    /// Skins are applied; audio and playlist files replace the playlist and
+    /// play, or are inserted where they were dropped on the playlist.
+    func filesDropped(_ urls: [URL], on id: WindowID, at point: SkinPoint? = nil) {
         if urls.count == 1, let url = urls.first, Self.isSkin(url) {
             (NSApp.delegate as? AppDelegate)?.loadSkin(from: url)
             return
         }
-        let audio = Self.audioFiles(in: urls)
-        guard !audio.isEmpty else { return }
-        if id == .playlist {
-            model.append(audio)
+        guard !PlayerModel.tracks(from: urls).isEmpty else { return }
+        if id == .playlist, !playlist.shade {
+            model.add(urls, at: point.map(playlist.insertionRow(at:)))
         } else {
-            model.load(audio, play: true)
+            model.load(urls, play: true)
         }
     }
 
@@ -470,10 +495,16 @@ final class WindowManager: NSObject {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
-        panel.allowedContentTypes = TrackInfo.supportedExtensions.compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = TrackInfo.supportedExtensions.union(PlaylistFile.extensions).compactMap { UTType(filenameExtension: $0) }
         panel.message = "Choose files or folders to play"
         guard panel.runModal() == .OK else { return }
-        let audio = Self.audioFiles(in: panel.urls)
-        if !audio.isEmpty { model.load(audio, play: true) }
+        if !PlayerModel.tracks(from: panel.urls).isEmpty { model.load(panel.urls, play: true) }
+    }
+
+    private lazy var jumpToFile = JumpToFilePanel(model: model)
+
+    /// Winamp's "Jump to file" (J): search the playlist and play a match.
+    @objc func showJumpToFile() {
+        jumpToFile.show()
     }
 }

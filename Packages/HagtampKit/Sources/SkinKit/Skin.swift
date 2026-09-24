@@ -28,18 +28,20 @@ public struct Skin: Sendable {
 
     public func bitmap(_ sheet: SkinSheet) -> Bitmap? { sheets[sheet] }
 
-    public static func load(contentsOf url: URL) throws -> Skin {
+    /// Loads a skin; missing bitmaps come from `fallback` (the bundled default skin).
+    public static func load(contentsOf url: URL, fallback: Skin = .base) throws -> Skin {
         let archive = try SkinArchive(contentsOf: url)
-        return Skin(archive: archive, name: url.deletingPathExtension().lastPathComponent, fallback: .base)
+        return Skin(archive: archive, name: url.deletingPathExtension().lastPathComponent, fallback: fallback)
     }
 
     public static func load(zipData: Data, name: String) throws -> Skin {
         Skin(archive: try SkinArchive(zipData: zipData), name: name, fallback: .base)
     }
 
-    /// The Winamp 2.91 base skin bundled with the app.
+    /// The default skin bundled with the app: the Winamp 2.91 base skin with
+    /// Hagtamp's name in the title bars (scripts/retitle_base_skin.py).
     public static let base: Skin = {
-        let url = Bundle.module.url(forResource: "base-2.91", withExtension: "wsz")!
+        let url = Bundle.module.url(forResource: "hagtamp-base", withExtension: "wsz")!
         let archive = try! SkinArchive(contentsOf: url)
         let skin = Skin(archive: archive, name: "Base Skin", fallback: nil)
         precondition(skin.warnings.isEmpty, "Bundled base skin is incomplete: \(skin.warnings)")

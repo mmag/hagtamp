@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
-        if let path = UserDefaults.standard.string(forKey: Self.lastSkinKey) {
+        if let path = Storage.defaults.string(forKey: Self.lastSkinKey) {
             loadSkin(from: URL(fileURLWithPath: path), remember: false)
         }
         windows.start()
@@ -30,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func loadSkin(from url: URL, remember: Bool = true) {
         do {
             windows.setSkin(try Skin.load(contentsOf: url))
-            if remember { UserDefaults.standard.set(url.path, forKey: Self.lastSkinKey) }
+            if remember { Storage.defaults.set(url.path, forKey: Self.lastSkinKey) }
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
         } catch {
             let alert = NSAlert()
@@ -44,14 +44,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "wsz") ?? .zip, .zip]
         panel.canChooseDirectories = true
-        panel.message = "Choose a Winamp skin (.wsz) or an unpacked skin folder"
+        panel.message = "Choose a skin (.wsz) or an unpacked skin folder"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         loadSkin(from: url)
     }
 
     @objc func useBaseSkin(_ sender: Any?) {
         windows.setSkin(.base)
-        UserDefaults.standard.removeObject(forKey: Self.lastSkinKey)
+        Storage.defaults.removeObject(forKey: Self.lastSkinKey)
     }
 
     // MARK: - Menu bar
@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let viewMenu = NSMenu(title: "View")
         viewMenu.addItem(target: windows, "Playlist Editor", #selector(WindowManager.togglePlaylist), key: "e", modifiers: .option)
         viewMenu.addItem(target: windows, "Equalizer", #selector(WindowManager.toggleEqualizer), key: "g", modifiers: .option)
+        viewMenu.addItem(target: windows, "Album Art", #selector(WindowManager.toggleAlbumArt), key: "a", modifiers: .option)
         viewMenu.addItem(.separator())
         viewMenu.addItem(target: windows, "Double Size", #selector(WindowManager.toggleDoubleSize), key: "d", modifiers: .command)
         viewMenu.addItem(target: windows, "Always On Top", #selector(WindowManager.toggleAlwaysOnTop), key: "a", modifiers: .control)

@@ -164,7 +164,7 @@ class SkinWindowController: NSObject, SkinViewDelegate {
 
     func keyDown(_ event: NSEvent) -> Bool { manager.handleKey(event) }
 
-    func filesDropped(_ urls: [URL]) { manager.filesDropped(urls, on: id) }
+    func filesDropped(_ urls: [URL], at point: SkinPoint) { manager.filesDropped(urls, on: id, at: point) }
 
     // MARK: - Helpers
 

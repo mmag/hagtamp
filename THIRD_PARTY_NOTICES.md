@@ -46,4 +46,5 @@ https://github.com/weichsel/ZIPFoundation — MIT License, Copyright (c) 2017-20
 
 ## Winamp base skin
 
-`skins/winamp.wsz` and `SkinKit/Resources/base-2.91.wsz` are the Winamp 2.91 base skin by Nullsoft.
+`skins/winamp.wsz` is the Winamp 2.91 base skin by Nullsoft. `SkinKit/Resources/hagtamp-base.wsz`
+is derived from it (title lettering redrawn by `scripts/retitle_base_skin.py`).

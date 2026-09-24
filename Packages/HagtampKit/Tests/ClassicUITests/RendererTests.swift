@@ -11,8 +11,11 @@ import Testing
     @Test func baseSkinMatchesMuseumScreenshot() throws {
         let url = try #require(Bundle.module.url(forResource: "base-2.91-museum", withExtension: "png", subdirectory: "Fixtures"))
         let reference = try #require(Bitmap(contentsOf: url))
+        // The original Winamp 2.91 base skin (the bundled default is retitled).
+        let skinURL = try #require(Bundle.module.url(forResource: "base-2.91", withExtension: "wsz", subdirectory: "Fixtures"))
+        let skin = try Skin.load(contentsOf: skinURL)
         let diff = ImageDiff(
-            reference: reference, render: ReferenceScene.render(.base),
+            reference: reference, render: ReferenceScene.render(skin),
             areas: [("scene", reference.bounds)], ignoring: ReferenceScene.volatileRects)
         #expect(diff.areas[0].compared > 75_000)
         #expect(diff.totalMismatches == 0)

@@ -39,7 +39,7 @@ final class MainWindowController: SkinWindowController {
         }
         s.marqueeText = pressed == .clutterDoubleSize ? Marquee.doubleSizeText(enabled: manager.doubleSize) : manager.marqueeText
         s.marqueeOffset = pressed == .clutterDoubleSize ? 0 : manager.marqueeOffset
-        if let track = model.currentTrack {
+        if let track = model.displayedTrack {
             // Right-aligned in their boxes; longer values are cut by the box (1411 kbps shows "141").
             s.kbps = track.bitrate.map { String($0).leftPadded(to: 3) }
             s.khz = track.sampleRate.map { String(Int(($0 / 1000).rounded())).leftPadded(to: 2) }
@@ -119,7 +119,8 @@ final class MainWindowController: SkinWindowController {
         case .repeatToggle: model.repeatEnabled.toggle()
         case .about: NSApp.orderFrontStandardAboutPanel(nil)
         case .eject: manager.openFiles()
-        default: break  // file info: stage 4
+        case .clutterInfo: model.displayedTrack.map(FileInfoPanel.show)
+        default: break
         }
     }
 

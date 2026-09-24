@@ -12,6 +12,7 @@ import SkinKit
 enum SelfTest {
     static func runIfRequested(_ manager: WindowManager) {
         guard let dir = ProcessInfo.processInfo.environment["HAGTAMP_SELFTEST"] else { return }
+        setvbuf(stdout, nil, _IOLBF, 0)  // progress stays visible if a step hangs
         let output = URL(fileURLWithPath: dir)
         try? FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         var step = 0
@@ -24,13 +25,28 @@ enum SelfTest {
 
         snap("start")
 
-        let savedVolume = manager.model.volume
         Task { @MainActor in
+            checkPresetMenu(manager)
             await audioSteps(manager, snap: snap)
+            await playlistSteps(manager, snap: snap)
             uiSteps(manager, snap: snap)
-            manager.model.volume = savedVolume  // the slider steps change the saved volume
             NSApp.terminate(nil)
         }
+    }
+
+    /// Picks "Rock" from the PRESETS menu the way AppKit would.
+    private static func checkPresetMenu(_ manager: WindowManager) {
+        let menu = manager.equalizer.presetsMenu()
+        guard let load = menu.item(withTitle: "Load")?.submenu, let rock = load.item(withTitle: "Rock") else {
+            print("selftest: preset menu: no Load > Rock")
+            return
+        }
+        let before = manager.model.bands[0]
+        print("selftest: preset item enabled=\(rock.isEnabled) target=\(String(describing: rock.target)) action=\(String(describing: rock.action))")
+        let sent = NSApp.sendAction(rock.action!, to: rock.target, from: rock)
+        print("selftest: preset sent=\(sent) band0 \(before) -> \(manager.model.bands[0])")
+        load.performActionForItem(at: load.index(of: rock))
+        print("selftest: preset performAction band0 -> \(manager.model.bands[0])")
     }
 
     /// Plays two generated tones silently: time, visualizer, gapless handover.
@@ -38,9 +54,9 @@ enum SelfTest {
         let model = manager.model
         let tones = [(1000.0, "tone-1k"), (220.0, "tone-220")].compactMap { makeTone(frequency: $0.0, name: $0.1) }
         model.load(tones, play: true)
-        model.engine.volume = 0  // silent, without touching the saved volume
+        model.volume = 0  // silent (the self test has its own settings)
         try? await Task.sleep(for: .milliseconds(1500))
-        print("selftest: status=\(model.status) index=\(model.currentIndex) elapsed=\(String(format: "%.2f", model.elapsed)) duration=\(model.duration ?? -1) title=\(model.currentTrack?.displayName ?? "-") kbps=\(model.currentTrack?.bitrate ?? -1)")
+        print("selftest: status=\(model.status) index=\(model.currentIndex ?? -1) elapsed=\(String(format: "%.2f", model.elapsed)) duration=\(model.duration ?? -1) title=\(model.currentTrack?.displayName ?? "-") kbps=\(model.currentTrack?.bitrate ?? -1)")
         snap("playing-analyzer")
 
         manager.visualizerSettings.mode = .oscilloscope
@@ -50,7 +66,7 @@ enum SelfTest {
 
         model.seek(to: 0.97)
         try? await Task.sleep(for: .milliseconds(800))
-        print("selftest: after end of first track index=\(model.currentIndex) status=\(model.status) elapsed=\(String(format: "%.2f", model.elapsed))")
+        print("selftest: after end of first track index=\(model.currentIndex ?? -1) status=\(model.status) elapsed=\(String(format: "%.2f", model.elapsed))")
         snap("gapless-second-track")
 
         model.pause()
@@ -61,7 +77,83 @@ enum SelfTest {
         print("selftest: stopped status=\(model.status)")
     }
 
-    private static func makeTone(frequency: Double, name: String) -> URL? {
+    /// Selection, dragging, sorting and keyboard editing on nine generated files.
+    private static func playlistSteps(_ manager: WindowManager, snap: (String) -> Void) async {
+        let model = manager.model, pl = manager.playlist
+        let names = ["delta", "alpha", "echo", "charlie", "bravo", "foxtrot", "golf", "hotel", "india"]
+        let files = names.enumerated().compactMap { i, name in
+            makeTone(frequency: 200 + Double(i) * 100, name: name, seconds: Double(i + 1))
+        }
+        model.load(files, play: false)
+        manager.setPlaylistSizeForTesting(width: 1, height: 2)
+        try? await Task.sleep(for: .milliseconds(500))  // tags are read in the background
+        func order() -> String {
+            model.playlist.entries.map { $0.url.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "hagtamp-", with: "") }
+                .joined(separator: " ")
+        }
+        func rowPoint(_ row: Int) -> SkinPoint { SkinPoint(x: 60, y: 23 + row * 13 + 6) }
+
+        pl.mouseDown(at: rowPoint(1), event: event(.leftMouseDown, pl))
+        pl.mouseUp(at: rowPoint(1), event: event(.leftMouseUp, pl))
+        pl.mouseDown(at: rowPoint(3), event: event(.leftMouseDown, pl, modifiers: .shift))
+        pl.mouseUp(at: rowPoint(3), event: event(.leftMouseUp, pl, modifiers: .shift))
+        print("selftest: selected=\(model.playlist.selectedIndices) order=\(order())")
+        snap("pl-selection")
+
+        // Drag the selection two rows down.
+        pl.mouseDown(at: rowPoint(2), event: event(.leftMouseDown, pl))
+        pl.mouseDragged(to: rowPoint(4), event: event(.leftMouseDragged, pl))
+        pl.mouseUp(at: rowPoint(4), event: event(.leftMouseUp, pl))
+        print("selftest: dragged selected=\(model.playlist.selectedIndices) order=\(order())")
+        snap("pl-dragged")
+
+        model.editPlaylist { $0.sort(by: .fileName) }
+        print("selftest: sorted order=\(order())")
+
+        // Home, Shift+Down twice, Delete.
+        _ = pl.keyDown(key(115, pl))
+        _ = pl.keyDown(key(125, pl, modifiers: .shift))
+        _ = pl.keyDown(key(125, pl, modifiers: .shift))
+        print("selftest: keyboard selected=\(model.playlist.selectedIndices)")
+        _ = pl.keyDown(key(51, pl))
+        print("selftest: after delete count=\(model.playlist.count) order=\(order())")
+        snap("pl-after-delete")
+
+        pl.mouseDown(at: rowPoint(2), event: event(.leftMouseDown, pl, clickCount: 2))
+        pl.mouseUp(at: rowPoint(2), event: event(.leftMouseUp, pl, clickCount: 2))
+        try? await Task.sleep(for: .milliseconds(300))
+        print("selftest: double-click plays index=\(model.currentIndex ?? -1) status=\(model.status) marquee=\(manager.marqueeText)")
+        snap("pl-playing")
+        model.stop()
+
+        // Album art from a cover image next to the files.
+        writeCover(next: files[0])
+        manager.toggleAlbumArt()
+        try? await Task.sleep(for: .milliseconds(600))
+        print("selftest: album art visible=\(manager.isVisible(.albumArt)) cover=\(manager.albumArt.hasCover) frame=\(manager.albumArt.window.frame)")
+        snap("album-art")
+        manager.toggleAlbumArt()
+
+        let saved = Storage.supportDirectory.appendingPathComponent("playlist.m3u8")
+        let lines = ((try? String(contentsOf: saved, encoding: .utf8)) ?? "").split(separator: "\n").count
+        print("selftest: saved playlist lines=\(lines)")
+        manager.setPlaylistSizeForTesting(width: 0, height: 0)
+    }
+
+    /// A striped test cover (cover.png) in the folder of `track`.
+    private static func writeCover(next track: URL) {
+        var cover = Bitmap(width: 64, height: 64, fill: PixelColor(rgb: 0x2060C0))
+        for y in stride(from: 0, to: 64, by: 8) { cover.fill(PixelRect(x: 0, y: y, width: 64, height: 4), with: PixelColor(rgb: 0xF0C040)) }
+        try? cover.pngData().write(to: track.deletingLastPathComponent().appendingPathComponent("cover.png"))
+    }
+
+    private static func key(_ code: UInt16, _ c: SkinWindowController, modifiers: NSEvent.ModifierFlags = []) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: c.window.windowNumber,
+            context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code)!
+    }
+
+    private static func makeTone(frequency: Double, name: String, seconds: Double = 3) -> URL? {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-\(name).wav")
         let rate = 44100.0
         let settings: [String: Any] = [
@@ -69,7 +161,7 @@ enum SelfTest {
             AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false,
         ]
         guard let file = try? AVAudioFile(forWriting: url, settings: settings),
-            let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(3 * rate))
+            let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(seconds * rate))
         else { return nil }
         buffer.frameLength = buffer.frameCapacity
         for channel in 0..<Int(file.processingFormat.channelCount) {
@@ -98,7 +190,7 @@ enum SelfTest {
         press(pl, .menu(.add))
         snap("add-menu")
         release(pl, .menu(.add))
-        click(pl, .menu(.add))  // closes the sticky menu
+        click(pl, .trackList)  // a click outside the sticky menu closes it
 
         // Resize the playlist by two steps each way through the controller's drag path.
         manager.setPlaylistSizeForTesting(width: 2, height: 2)
@@ -134,10 +226,12 @@ enum SelfTest {
         return SkinPoint(x: rect.x + rect.width / 2, y: rect.y + rect.height / 2)
     }
 
-    private static func event(_ type: NSEvent.EventType, _ c: SkinWindowController) -> NSEvent {
+    private static func event(
+        _ type: NSEvent.EventType, _ c: SkinWindowController, modifiers: NSEvent.ModifierFlags = [], clickCount: Int = 1
+    ) -> NSEvent {
         NSEvent.mouseEvent(
-            with: type, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: c.window.windowNumber,
-            context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+            with: type, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: c.window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: clickCount, pressure: 1)!
     }
 
     private static func press(_ c: SkinWindowController, _ control: Control) {
@@ -157,19 +251,31 @@ enum SelfTest {
 
     /// All visible windows drawn at their screen positions over a grey backdrop.
     private static func snapshot(_ manager: WindowManager) -> Bitmap {
-        let windows = [manager.main, manager.equalizer, manager.playlist].filter { $0.window.isVisible }
+        let windows = [manager.main, manager.equalizer, manager.playlist, manager.albumArt].filter { $0.window.isVisible }
         let union = windows.map(\.window.frame).reduce(NSRect.null) { $0.union($1) }.insetBy(dx: -8, dy: -8)
         var canvas = Bitmap(width: Int(union.width), height: Int(union.height), fill: PixelColor(rgb: 0x5A5A5A))
         for c in windows {
             let bitmap = c.renderMasked().scaled(by: manager.scale)
             let frame = c.window.frame
-            canvas.draw(bitmap, from: bitmap.bounds, atX: Int(frame.minX - union.minX), y: Int(union.maxY - frame.maxY))
+            let x = Int(frame.minX - union.minX), y = Int(union.maxY - frame.maxY)
+            canvas.draw(bitmap, from: bitmap.bounds, atX: x, y: y)
+            // Subviews (the album art image) are drawn by AppKit, not in the bitmap.
+            for view in c.window.skinView.subviews {
+                guard let imageView = view as? NSImageView, let image = imageView.image,
+                    let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+                else { continue }
+                let r = view.frame
+                let height = canvas.height
+                canvas.withCGContext { ctx in
+                    ctx.draw(cg, in: CGRect(x: CGFloat(x) + r.minX, y: CGFloat(height - y) - r.maxY, width: r.width, height: r.height))
+                }
+            }
         }
         return canvas
     }
 
     private static func layout(_ manager: WindowManager) -> String {
-        [("main", manager.main), ("eq", manager.equalizer), ("pl", manager.playlist)].map { name, c in
+        [("main", manager.main), ("eq", manager.equalizer), ("pl", manager.playlist), ("art", manager.albumArt)].map { name, c in
             let f = c.window.frame
             return c.window.isVisible ? "\(name)=\(Int(f.minX)),\(Int(f.maxY)) \(Int(f.width))x\(Int(f.height))" : "\(name)=hidden"
         }.joined(separator: " ")

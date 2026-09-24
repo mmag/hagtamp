@@ -19,7 +19,7 @@ let package = Package(
         .target(
             name: "SkinKit",
             dependencies: ["ZIPFoundation"],
-            resources: [.copy("Resources/base-2.91.wsz")]
+            resources: [.copy("Resources/hagtamp-base.wsz")]
         ),
         .target(name: "ClassicUI", dependencies: ["SkinKit"]),
         .target(name: "PlayerCore"),

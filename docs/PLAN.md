@@ -18,12 +18,18 @@ Goal: a macOS player that looks and behaves like Winamp 2.x with classic skins, 
 1. **Done** — `SkinKit` + static rendering of main/EQ/playlist windows, golden comparison against Skin Museum screenshots (`make compare`).
 2. **Done** — window system: hit-testing and pressed states for every control, sliders (incl. EQ band sweeping), window shapes from `region.txt` (transparent pixels click through), easy move, snapping to windows and screen edges, main window pulling its docked windows, docked windows following shade/double-size/resize changes, shade modes for all windows, playlist resize and bottom menus, skin cursors (`.cur`/`.ani`), Winamp keys Z X C V B and arrows. Playback is simulated by `PlayerModel` until stage 3.
 3. **Done** — audio on SFBAudioEngine (`AudioCore`): local files in every format SFB decodes, gapless queue honouring shuffle/repeat, Winamp transport semantics, seek, volume (squared curve), balance, 10-band EQ + preamp (peaking filters sized to band spacing, shelves at the ends), EQ presets (Winamp's 17 built-ins, user presets, `.eqf` load/save), visualizer (Nullsoft FFT analyzer with normal/fire/line, thick/thin, peaks, falloffs; oscilloscope dots/lines/solid; shade-mode mini vis) fed from a post-EQ pre-volume tap, file opening (eject, L, drag and drop, Finder). Volume/EQ/visualizer settings persist.
-4. Playlist: selection, drag reordering, scrolling, resize, ADD/REM/SEL/MISC/LIST menus, sorting, `m3u`/`pls`, Jump to file.
-5. Navidrome client + cache + Media Library window.
+4. **Done** — playlist (`PlayerCore.Playlist` + `PlaylistFile`): Winamp 2 selection (click, Shift range from the anchor, ⌘ toggle), dragging the selection, keyboard (arrows, Shift/⌥ + arrows, Page/Home/End, Enter, Delete, ⌘A), ADD (URL/dir/file), REM (duplicates, dead files, all, crop, selected), SEL, MISC (sort by title/filename/path, reverse, randomize, file info, jump to file), LIST (new/save/load `m3u`/`m3u8`/`pls`), right-click menu, drop at position, follow current track, running time with "+", tags read in the background, unplayable entries skipped, the playing file keeps showing after removal, playlist restored on launch (`Application Support/Hagtamp/playlist.m3u8`). Deferred: HTML playlist, tag editing in file info, "enqueue" in Jump to file. Deleting files from disk is deliberately not offered.
+   Also done after stage 4: optional Album Art window (generic GEN.BMP frame, cover from the track's folder — cover/folder/front… — or embedded in its tags), EQ preset menu fix, no Winamp/Nullsoft branding in the UI, default skin retitled "HAGTAMP" (`scripts/retitle_base_skin.py`).
+5. Navidrome client + cache + Media Library window (reuses the generic window frame).
 6. Polish: Winamp main menu, hotkeys, preferences, skin browser, media keys / Now Playing, Milkdrop (projectM) maybe.
+
+## TODO / known issues
+
+- [ ] Dragging the main window moves the docked equalizer/playlist along, but they can end up behind other apps' windows (only the clicked window is raised). Raise the whole docked group (Winamp raises all its windows) when a drag starts or a window is clicked.
 
 ## Licensing notes
 
+- The bundled default skin is Nullsoft's Winamp 2.91 base skin with the title lettering redrawn. Fine for personal use; a public release should ship an original default skin.
 - SFBAudioEngine is MIT, but some of its decoders are LGPL (mpg123, LAME, Musepack, libsndfile). Fine for an open-source app; distributing a closed build means honouring LGPL relinking terms or dropping those decoders.
 
 ## Skin format findings
