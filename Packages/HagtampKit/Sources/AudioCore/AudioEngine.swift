@@ -2,6 +2,7 @@ import AVFAudio
 import Foundation
 import PlayerCore
 @preconcurrency import SFBAudioEngine
+import StreamingInput
 
 public enum EngineState: Sendable {
     case stopped, playing, paused
@@ -27,11 +28,19 @@ public final class AudioEngine {
 
     private let player = AudioPlayer()
     private let graph: ProcessingGraph
+    /// Decoders handed to the player, in play order, with the streams behind
+    /// them. A stream's reader is cancelled once the player is done with it,
+    /// so a decoder waiting for data never holds up the next track. (Holding
+    /// the decoders keeps their identities unique.)
+    private var handedOut: [(decoder: any PCMDecoding, stream: StreamingTrack?)] = []
 
     public init() {
         graph = ProcessingGraph(samples: samples)
         graph.onEvent = { [weak self] event in
             Task { @MainActor in self?.onEvent?(event) }
+        }
+        graph.onNowPlaying = { [weak self] decoder in
+            Task { @MainActor in self?.released(before: decoder) }
         }
         player.delegate = graph
         let source = player.sourceNode
@@ -45,14 +54,45 @@ public final class AudioEngine {
 
     /// Starts `url` now, dropping anything queued.
     public func play(_ url: URL) throws {
-        try player.play(url)
+        try play(.file(url))
     }
 
     /// Queues `url` to follow the current track without a gap.
     public func enqueue(_ url: URL) throws {
-        try player.enqueue(url)
+        try enqueue(.file(url))
     }
 
+    /// Starts a file or a stream now, dropping anything queued.
+    public func play(_ source: PlayableSource) throws {
+        let decoder = try source.decoder()
+        try player.play(decoder)
+        releaseAll()
+        handedOut = [(decoder, source.stream)]
+    }
+
+    /// Starts a file at `fraction` of its length, dropping anything queued;
+    /// playback stays paused if it was.
+    public func play(_ url: URL, from fraction: Double) throws {
+        let decoder = PositionedDecoder(decoder: try AudioDecoder(url: url), fraction: fraction)
+        if player.isPaused {
+            try player.enqueue(decoder, immediate: true)
+        } else {
+            try player.play(decoder)
+        }
+        releaseAll()
+        handedOut = [(decoder, nil)]
+    }
+
+    /// Queues a file or a stream to follow the current track without a gap.
+    public func enqueue(_ source: PlayableSource) throws {
+        let decoder = try source.decoder()
+        try player.enqueue(decoder)
+        handedOut.append((decoder, source.stream))
+    }
+
+    /// Drops queued tracks the player hasn't started decoding. (Their
+    /// streams are released once a later track plays: one the player had
+    /// already picked up still plays and must keep reading.)
     public func clearQueue() {
         player.clearQueue()
     }
@@ -62,12 +102,28 @@ public final class AudioEngine {
 
     public func stop() {
         player.stop()
+        releaseAll()
         samples.clear()
+    }
+
+    private func releaseAll() {
+        for entry in handedOut { entry.stream?.cancel() }
+        handedOut = []
+    }
+
+    /// The player moved on to `decoder`: everything handed out before it is done.
+    private func released(before decoder: ObjectIdentifier) {
+        guard let index = handedOut.firstIndex(where: { ObjectIdentifier($0.decoder) == decoder }) else { return }
+        for entry in handedOut[..<index] { entry.stream?.cancel() }
+        handedOut.removeFirst(index)
     }
 
     public var state: EngineState {
         player.isPlaying ? .playing : player.isPaused ? .paused : .stopped
     }
+
+    /// Streams can't seek until their download is complete.
+    public var canSeek: Bool { player.supportsSeeking }
 
     /// The track being heard.
     public var nowPlayingURL: URL? { player.nowPlaying?.inputSource.url }
@@ -76,8 +132,9 @@ public final class AudioEngine {
     public var currentTime: Double? { player.currentTime }
     public var totalTime: Double? { player.totalTime }
 
-    public func seek(to fraction: Double) {
-        _ = player.seek(position: min(1, max(0, fraction)))
+    @discardableResult
+    public func seek(to fraction: Double) -> Bool {
+        player.seek(position: min(1, max(0, fraction)))
     }
 
     // MARK: - Volume, balance, equalizer
@@ -111,6 +168,7 @@ final class ProcessingGraph: NSObject, AudioPlayer.Delegate, @unchecked Sendable
     let balance = AVAudioMixerNode()
     private let samples: SampleBuffer
     var onEvent: (@Sendable (AudioEngine.Event) -> Void)?
+    var onNowPlaying: (@Sendable (ObjectIdentifier) -> Void)?
 
     init(samples: SampleBuffer) {
         self.samples = samples
@@ -165,6 +223,7 @@ final class ProcessingGraph: NSObject, AudioPlayer.Delegate, @unchecked Sendable
     }
 
     func audioPlayer(_ audioPlayer: AudioPlayer, nowPlayingChanged nowPlaying: (any PCMDecoding)?) {
+        if let nowPlaying { onNowPlaying?(ObjectIdentifier(nowPlaying)) }
         onEvent?(.nowPlaying(nowPlaying?.inputSource.url))
     }
 

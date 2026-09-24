@@ -60,15 +60,22 @@ final class AlbumArtWindowController: SkinWindowController {
             return
         }
         imageView.image = nil
+        if manager.navidrome.handles(track) {
+            Task { [weak self] in
+                let image = await self?.manager.navidrome.cover(for: track)
+                self?.show(image, for: track)
+            }
+            return
+        }
         Task.detached(priority: .utility) {
             let data = CoverArt.imageData(for: track)
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                let image = data.flatMap(NSImage.init(data:))
-                if let image { self.cache[track] = image }
-                if self.shownTrack == track { self.imageView.image = image }
-            }
+            await MainActor.run { [weak self] in self?.show(data.flatMap(NSImage.init(data:)), for: track) }
         }
+    }
+
+    private func show(_ image: NSImage?, for track: URL) {
+        if let image { cache[track] = image }
+        if shownTrack == track { imageView.image = image }
     }
 
     var hasCover: Bool { imageView.image != nil }

@@ -25,3 +25,6 @@ reamp/
 # env
 .env
 .env.*
+
+# Local Navidrome for development (scripts/navidrome_dev.sh)
+.navidrome-dev/

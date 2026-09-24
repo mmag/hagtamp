@@ -73,11 +73,13 @@ public enum PlaylistFile {
         }
     }
 
-    /// Absolute paths, file/http URLs, and paths relative to the playlist (Windows separators too).
+    /// Absolute paths, URLs (file, http, our own schemes), and paths relative
+    /// to the playlist (Windows separators too).
     static func resolve(_ entry: String, base: URL) -> URL? {
         let trimmed = entry.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
-        if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), ["file", "http", "https"].contains(scheme) {
+        // A one-letter "scheme" is a Windows drive ("C:\Music\...").
+        if let url = URL(string: trimmed), let scheme = url.scheme, scheme.count > 1 {
             return url
         }
         let path = trimmed.replacingOccurrences(of: "\\", with: "/")

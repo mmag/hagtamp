@@ -1,0 +1,192 @@
+import CryptoKit
+import Foundation
+
+/// Connection settings; the password lives in the Keychain, not here.
+public struct NavidromeServer: Codable, Equatable, Sendable {
+    public var url: URL
+    public var username: String
+
+    public init(url: URL, username: String) {
+        self.url = url
+        self.username = username
+    }
+
+    /// Stable key for caches and track URLs: host, port and user.
+    public var key: String {
+        let host = url.host ?? "server"
+        let port = url.port.map { "-\($0)" } ?? ""
+        return "\(username)@\(host)\(port)".replacingOccurrences(of: "/", with: "_")
+    }
+}
+
+/// Client for Navidrome's Subsonic API.
+///
+/// Authentication uses the token scheme (md5 of password + random salt on
+/// every request). Browsing responses are cached on disk and served from
+/// the cache when the server can't be reached, so the library stays
+/// browsable offline.
+public final class NavidromeClient: Sendable {
+    public static let apiVersion = "1.16.1"
+    public static let clientName = "hagtamp"
+
+    public let server: NavidromeServer
+    private let password: String
+    private let session: URLSession
+    private let responseCache: URL?
+
+    public init(server: NavidromeServer, password: String, session: URLSession = .shared, responseCache: URL? = nil) {
+        self.server = server
+        self.password = password
+        self.session = session
+        self.responseCache = responseCache
+        if let responseCache {
+            try? FileManager.default.createDirectory(at: responseCache, withIntermediateDirectories: true)
+        }
+    }
+
+    // MARK: - Browsing
+
+    public func ping() async throws {
+        _ = try await call("ping", cacheable: false)
+    }
+
+    /// All artists (the server's index flattened, in its order).
+    public func artists() async throws -> [NavidromeArtist] {
+        struct Index: Decodable { var artist: [NavidromeArtist]? }
+        struct Artists: Decodable { var index: [Index]? }
+        let result: Artists = try await payload("getArtists", key: "artists")
+        return (result.index ?? []).flatMap { $0.artist ?? [] }
+    }
+
+    public func albums(ofArtist id: String) async throws -> [NavidromeAlbum] {
+        struct Artist: Decodable { var album: [NavidromeAlbum]? }
+        let result: Artist = try await payload("getArtist", key: "artist", ["id": id])
+        return result.album ?? []
+    }
+
+    /// An album with its songs.
+    public func album(_ id: String) async throws -> NavidromeAlbum {
+        try await payload("getAlbum", key: "album", ["id": id])
+    }
+
+    public enum AlbumListType: String, Sendable {
+        case newest, recent, frequent, random, alphabeticalByName, alphabeticalByArtist, starred
+    }
+
+    public func albumList(_ type: AlbumListType, size: Int = 100, offset: Int = 0) async throws -> [NavidromeAlbum] {
+        struct List: Decodable { var album: [NavidromeAlbum]? }
+        let result: List = try await payload(
+            "getAlbumList2", key: "albumList2", ["type": type.rawValue, "size": String(size), "offset": String(offset)])
+        return result.album ?? []
+    }
+
+    public func search(_ query: String, artists: Int = 20, albums: Int = 50, songs: Int = 200) async throws -> NavidromeSearchResult {
+        try await payload(
+            "search3", key: "searchResult3",
+            ["query": query, "artistCount": String(artists), "albumCount": String(albums), "songCount": String(songs)])
+    }
+
+    public func playlists() async throws -> [NavidromePlaylist] {
+        struct Playlists: Decodable { var playlist: [NavidromePlaylist]? }
+        let result: Playlists = try await payload("getPlaylists", key: "playlists")
+        return result.playlist ?? []
+    }
+
+    /// A playlist with its songs.
+    public func playlist(_ id: String) async throws -> NavidromePlaylist {
+        try await payload("getPlaylist", key: "playlist", ["id": id])
+    }
+
+    public func song(_ id: String) async throws -> NavidromeSong {
+        try await payload("getSong", key: "song", ["id": id])
+    }
+
+    /// Tells the server what is playing (`submission` false) or was played.
+    public func scrobble(_ songID: String, submission: Bool) async throws {
+        _ = try await call("scrobble", ["id": songID, "submission": submission ? "true" : "false"], cacheable: false)
+    }
+
+    // MARK: - Media URLs
+
+    /// Stream URL; `format`/`maxBitRate` ask the server to transcode (nil = original file).
+    /// Transcoded streams come with an estimated length, which decoders need up front.
+    public func streamURL(songID: String, format: String? = nil, maxBitRate: Int? = nil) -> URL {
+        var params = ["id": songID]
+        if format != nil { params["estimateContentLength"] = "true" }
+        if let format { params["format"] = format }
+        if let maxBitRate { params["maxBitRate"] = String(maxBitRate) }
+        return url("stream", params)
+    }
+
+    public func coverArtURL(id: String, size: Int? = nil) -> URL {
+        var params = ["id": id]
+        if let size { params["size"] = String(size) }
+        return url("getCoverArt", params)
+    }
+
+    // MARK: - Requests
+
+    func url(_ endpoint: String, _ params: [String: String] = [:]) -> URL {
+        let salt = Self.salt()
+        let token = Insecure.MD5.hash(data: Data((password + salt).utf8)).map { String(format: "%02x", $0) }.joined()
+        var components = URLComponents(url: server.url.appendingPathComponent("rest/\(endpoint)"), resolvingAgainstBaseURL: false)!
+        let auth = [
+            "u": server.username, "t": token, "s": salt, "v": Self.apiVersion, "c": Self.clientName, "f": "json",
+        ]
+        components.queryItems = auth.merging(params) { _, new in new }.sorted { $0.key < $1.key }
+            .map { URLQueryItem(name: $0.key, value: $0.value) }
+        return components.url!
+    }
+
+    private static func salt() -> String {
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyz0123456789")
+        return String((0..<12).map { _ in alphabet.randomElement()! })
+    }
+
+    private func payload<T: Decodable>(_ endpoint: String, key: String, _ params: [String: String] = [:]) async throws -> T {
+        let body = try await call(endpoint, params, cacheable: true)
+        guard let value = body[key] else { throw NavidromeError(code: -1, message: "Missing \(key) in \(endpoint) response") }
+        let data = try JSONSerialization.data(withJSONObject: value)
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    /// The `subsonic-response` object of a call; cacheable calls fall back to
+    /// the last good response when the server can't be reached.
+    private func call(_ endpoint: String, _ params: [String: String] = [:], cacheable: Bool) async throws -> [String: Any] {
+        let cacheFile = cacheable ? cacheURL(endpoint, params) : nil
+        let data: Data
+        do {
+            let (fetched, response) = try await session.data(from: url(endpoint, params))
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                throw NavidromeError(code: -http.statusCode, message: "HTTP \(http.statusCode)")
+            }
+            data = fetched
+        } catch let error as URLError {
+            if let cacheFile, let cached = try? Data(contentsOf: cacheFile) {
+                return try Self.body(of: cached)
+            }
+            throw error
+        }
+        let body = try Self.body(of: data)
+        if let cacheFile { try? data.write(to: cacheFile, options: .atomic) }
+        return body
+    }
+
+    static func body(of data: Data) throws -> [String: Any] {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let body = json["subsonic-response"] as? [String: Any]
+        else { throw NavidromeError(code: -1, message: "Not a Subsonic response") }
+        if body["status"] as? String != "ok" {
+            let error = body["error"] as? [String: Any]
+            throw NavidromeError(code: error?["code"] as? Int ?? -1, message: error?["message"] as? String ?? "Request failed")
+        }
+        return body
+    }
+
+    private func cacheURL(_ endpoint: String, _ params: [String: String]) -> URL? {
+        guard let responseCache else { return nil }
+        let key = ([server.key, endpoint] + params.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }).joined(separator: "&")
+        let name = SHA256.hash(data: Data(key.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+        return responseCache.appendingPathComponent("\(name).json")
+    }
+}

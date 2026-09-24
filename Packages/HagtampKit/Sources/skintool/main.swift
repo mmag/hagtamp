@@ -17,6 +17,7 @@ let usage = """
            skintool render <skin> <out.png> [scale]
            skintool sheets <skin> <out-dir>
            skintool gen <skin> <out.png> [title]
+           skintool library <skin> <out.png>
            skintool compare <corpus-dir> [out-dir]
 
     compare uses skins/winamp.wsz (the original Winamp base skin) for missing
@@ -151,6 +152,33 @@ case "gen":
     sheet.draw(active, from: active.bounds, atX: 0, y: 0)
     sheet.draw(inactive, from: inactive.bounds, atX: active.width + 8, y: 0)
     try sheet.scaled(by: 2).pngData().write(to: URL(fileURLWithPath: arguments[2]))
+
+case "library":
+    // The media library window with sample content, at 2x.
+    guard arguments.count == 3 else { fail(usage) }
+    let skin = try Skin.load(contentsOf: URL(fileURLWithPath: arguments[1]))
+    var frame = GenWindowState(title: "Media Library")
+    frame.focused = true
+    frame.widthSteps = 11
+    frame.heightSteps = 10
+    var sidebar = ListViewModel(columns: [ListColumn("")], rows: [["Library"], ["Recently Added"], ["Playlists"]])
+    sidebar.showsHeader = false
+    sidebar.selection = [0]
+    var artists = ListViewModel(columns: [ListColumn("Artist"), ListColumn("Albums", width: 40, alignRight: true)],
+        rows: [["Alpha Tones", "2"], ["Beta Waves", "2"], ["Gamma Rays", "5"]])
+    artists.selection = [0]
+    let albums = ListViewModel(columns: [ListColumn("Album"), ListColumn("Year", width: 34, alignRight: true)],
+        rows: [["Alpha Tones Vol. 1", "2024"], ["Alpha Tones Vol. 2", "2024"]])
+    var tracks = ListViewModel(
+        columns: [ListColumn("#", width: 22, alignRight: true), ListColumn("Title"), ListColumn("Artist"), ListColumn("Album"), ListColumn("Length", width: 40, alignRight: true)],
+        rows: (1...6).map { ["\($0)", "Tone \($0)", "Alpha Tones", "Alpha Tones Vol. 1", "0:2\($0)"] })
+    tracks.selection = [1]
+    tracks.focused = true
+    var state = MediaLibraryState(frame: frame, sidebar: sidebar, upper: [artists, albums], tracks: tracks)
+    state.search = "alpha"
+    state.searchFocused = false
+    state.status = "6 tracks, 2:30"
+    try MediaLibraryRenderer.render(skin, state).scaled(by: 2).pngData().write(to: URL(fileURLWithPath: arguments[2]))
 
 case "compare":
     guard arguments.count >= 2 else { fail(usage) }

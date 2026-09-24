@@ -9,6 +9,7 @@ let package = Package(
         .library(name: "ClassicUI", targets: ["ClassicUI"]),
         .library(name: "PlayerCore", targets: ["PlayerCore"]),
         .library(name: "AudioCore", targets: ["AudioCore"]),
+        .library(name: "NavidromeKit", targets: ["NavidromeKit"]),
         .executable(name: "skintool", targets: ["skintool"]),
     ],
     dependencies: [
@@ -24,9 +25,14 @@ let package = Package(
         .target(name: "ClassicUI", dependencies: ["SkinKit"]),
         .target(name: "PlayerCore"),
         .target(
-            name: "AudioCore",
-            dependencies: ["PlayerCore", .product(name: "SFBAudioEngine", package: "SFBAudioEngine")]
+            name: "StreamingInput",
+            dependencies: [.product(name: "SFBAudioEngine", package: "SFBAudioEngine")]
         ),
+        .target(
+            name: "AudioCore",
+            dependencies: ["PlayerCore", "StreamingInput", .product(name: "SFBAudioEngine", package: "SFBAudioEngine")]
+        ),
+        .target(name: "NavidromeKit", dependencies: ["PlayerCore", "StreamingInput"]),
         .executableTarget(name: "skintool", dependencies: ["SkinKit", "ClassicUI"]),
         .testTarget(
             name: "SkinKitTests",
@@ -39,6 +45,10 @@ let package = Package(
             resources: [.copy("Fixtures")]
         ),
         .testTarget(name: "PlayerCoreTests", dependencies: ["PlayerCore"], resources: [.copy("Fixtures")]),
-        .testTarget(name: "AudioCoreTests", dependencies: ["AudioCore"]),
+        .testTarget(
+            name: "AudioCoreTests",
+            dependencies: ["AudioCore", "StreamingInput", .product(name: "SFBAudioEngine", package: "SFBAudioEngine")],
+            resources: [.copy("Fixtures")]),
+        .testTarget(name: "NavidromeKitTests", dependencies: ["NavidromeKit"], resources: [.copy("Fixtures")]),
     ]
 )

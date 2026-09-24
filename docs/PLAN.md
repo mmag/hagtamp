@@ -8,7 +8,7 @@ Goal: a macOS player that looks and behaves like Winamp 2.x with classic skins, 
 - Classic skins (`.wsz`) only. Modern skins (`.wal`, MAKI) are out of scope.
 - Audio: SFBAudioEngine (MIT) on AVAudioEngine — gapless, wide format support; AVAudioUnitEQ for the 10-band EQ + preamp; vDSP FFT for the visualizer.
 - Storage: GRDB (SQLite) for the local library index, Navidrome metadata cache and the audio cache index.
-- Streaming = caching: Navidrome tracks are downloaded (HTTP Range) into the cache while the player reads the same file; complete files stay cached (LRU with size limit, pinned albums/playlists are never evicted). Offline mode browses the DB and plays cached tracks.
+- Streaming = caching: Navidrome tracks are downloaded into the cache while the player reads the same file; complete files stay cached (LRU with size limit, pinned albums/playlists are never evicted). Offline mode browses cached responses and plays cached tracks.
 - Navidrome browsing lives in a Media Library window skinned with GEN.BMP/GENEX.BMP, like Winamp 5.
 - References: Webamp source = spec for sprite coordinates/layout; Reamp (`reamp/`) and Winamp itself = reference for behaviour. Targeted reverse engineering of Reamp only for specific questions.
 
@@ -20,12 +20,17 @@ Goal: a macOS player that looks and behaves like Winamp 2.x with classic skins, 
 3. **Done** — audio on SFBAudioEngine (`AudioCore`): local files in every format SFB decodes, gapless queue honouring shuffle/repeat, Winamp transport semantics, seek, volume (squared curve), balance, 10-band EQ + preamp (peaking filters sized to band spacing, shelves at the ends), EQ presets (Winamp's 17 built-ins, user presets, `.eqf` load/save), visualizer (Nullsoft FFT analyzer with normal/fire/line, thick/thin, peaks, falloffs; oscilloscope dots/lines/solid; shade-mode mini vis) fed from a post-EQ pre-volume tap, file opening (eject, L, drag and drop, Finder). Volume/EQ/visualizer settings persist.
 4. **Done** — playlist (`PlayerCore.Playlist` + `PlaylistFile`): Winamp 2 selection (click, Shift range from the anchor, ⌘ toggle), dragging the selection, keyboard (arrows, Shift/⌥ + arrows, Page/Home/End, Enter, Delete, ⌘A), ADD (URL/dir/file), REM (duplicates, dead files, all, crop, selected), SEL, MISC (sort by title/filename/path, reverse, randomize, file info, jump to file), LIST (new/save/load `m3u`/`m3u8`/`pls`), right-click menu, drop at position, follow current track, running time with "+", tags read in the background, unplayable entries skipped, the playing file keeps showing after removal, playlist restored on launch (`Application Support/Hagtamp/playlist.m3u8`). Deferred: HTML playlist, tag editing in file info, "enqueue" in Jump to file. Deleting files from disk is deliberately not offered.
    Also done after stage 4: optional Album Art window (generic GEN.BMP frame, cover from the track's folder — cover/folder/front… — or embedded in its tags), EQ preset menu fix, no Winamp/Nullsoft branding in the UI, default skin retitled "HAGTAMP" (`scripts/retitle_base_skin.py`).
-5. Navidrome client + cache + Media Library window (reuses the generic window frame).
+5. **Done** — Navidrome: `NavidromeKit` (Subsonic API client with token auth, on-disk response cache for offline browsing, `AudioCache` with LRU eviction), Preferences window (server, Keychain password, stream quality incl. MP3 transcoding, cache limit/clear), playing Navidrome songs (progressive: MP3/FLAC/Opus start after 256 KB with "Buffering: N%" and keep downloading into the cache, other formats wait for the whole file; next track prefetched for gapless playback, covers, scrobbling), skinned Media Library window (GEN/GENEX: sidebar Library / Recently Added / Playlists, search, artist + album lists over the track list, Play/Enqueue, keyboard). Dev server: `scripts/navidrome_dev.sh`.
 6. Polish: Winamp main menu, hotkeys, preferences, skin browser, media keys / Now Playing, Milkdrop (projectM) maybe.
 
 ## TODO / known issues
 
 - [x] Dragging the main window moves the docked equalizer/playlist along, but they could end up behind other apps' windows (only the clicked window was raised). Fixed: a click on any window raises all of them (`WindowManager.raiseAll`).
+
+- [x] Progressive streaming. `StreamingInput` (Objective-C, since SFBAudioEngine's `InputSource` can't be subclassed from Swift) reads the growing `.part` file and waits for bytes. It is unseekable until the download completes, because mpg123 scans a whole seekable file and opusfile reads its last page before playing. So a stream can't seek until it is downloaded; after that, seeking reopens the cached file at the position (`PositionedDecoder`). Ogg Vorbis and MP4/M4A still wait for the whole file: SFB's Vorbis seek callback reports failures as successes, and MP4 may keep its index at the end.
+- [ ] "Keep offline" pinning of albums/playlists (never evicted from the cache).
+- [ ] Local files in the Media Library (folders index).
+- [ ] Remember window positions, sizes and shade states across launches.
 
 ## Licensing notes
 
@@ -57,4 +62,4 @@ Collected while matching the museum screenshots; keep adding.
 - Playlist menus: exact press/release behaviour (we: press-drag-release picks, a plain click keeps the menu open).
 - Visualizer: analyzer bar colours and the 2 px "push down" come from Webamp; Webamp's fire style used the background colour for bar tips, we start at colour 2. Is the vis area drawn while stopped?
 - Volume curve (we use amplitude = slider²) and the EQ filter shapes vs. Winamp's actual equalizer.
-- Streaming (stage 5): SFBAudioEngine's `InputSource` can't be subclassed from Swift; progressive playback of a growing cache file needs another route (custom `PCMDecoding`, or AudioToolbox for transcoded streams).
+- Streaming: seeking past the downloaded part of a stream isn't possible (it would need HTTP Range requests into a sparse file). An MP3 whose LAME header promises more frames than it holds fails at its very end when streamed, because only a whole-file scan corrects the count; files from LAME and ffmpeg are fine.

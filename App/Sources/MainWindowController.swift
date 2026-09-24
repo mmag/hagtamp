@@ -46,6 +46,7 @@ final class MainWindowController: SkinWindowController {
             s.channels = track.channels
         }
         s.visualizer = manager.visualizerFrame
+        s.working = model.buffering != nil
         s.volume = model.volume
         s.balance = model.balance
         s.position = scrubPosition ?? model.position

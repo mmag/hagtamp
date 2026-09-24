@@ -3,6 +3,17 @@ import ClassicUI
 import Foundation
 import PlayerCore
 
+/// Turns playlist URLs that aren't local files (Navidrome songs) into something playable.
+@MainActor
+protocol RemoteTrackResolver: AnyObject {
+    func handles(_ url: URL) -> Bool
+    /// A file already on disk, without waiting.
+    func cachedFile(for url: URL) -> URL?
+    /// The cached file, or a download that can start playing, once enough of
+    /// it is there (`progress` reports 0...1 of that).
+    func prepare(_ url: URL, progress: @escaping @MainActor (Double) -> Void) async throws -> PlayableSource
+}
+
 /// Player state as the UI sees it, on top of the audio engine.
 ///
 /// Transport follows Winamp: Play restarts the track (or resumes when
@@ -16,10 +27,18 @@ final class PlayerModel {
     var onError: ((String) -> Void)?
 
     let engine = AudioEngine()
+    /// Provides local files for remote entries (Navidrome).
+    weak var resolver: RemoteTrackResolver?
     private(set) var playlist = Playlist()
     private(set) var status = PlaybackStatus.stopped
+    /// Progress 0...1 while a remote track buffers before playing.
+    private(set) var buffering: Double?
     /// Entry queued in the engine to follow the current track.
     private var queuedID: UUID?
+    /// Cached files (complete or still downloading) standing in for remote entries.
+    private var localFiles: [UUID: URL] = [:]
+    private var loadTask: Task<Void, Never>?
+    private var prefetchTask: Task<Void, Never>?
 
     var volume: Double = 200.0 / 255.0 {
         didSet { engine.volume = volume; saveSettings(); changed() }
@@ -63,10 +82,10 @@ final class PlayerModel {
     }
 
     /// Seconds into the current track (0 when stopped).
-    var elapsed: Double { status == .stopped ? 0 : engine.currentTime ?? 0 }
+    var elapsed: Double { status == .stopped || buffering != nil ? 0 : engine.currentTime ?? 0 }
 
     /// Length of the current track: the decoder's once playing, else the tags'.
-    var duration: Double? { (status != .stopped ? engine.totalTime : nil) ?? displayedTrack?.duration }
+    var duration: Double? { (status != .stopped && buffering == nil ? engine.totalTime : nil) ?? displayedTrack?.duration }
 
     var position: Double {
         guard let duration, duration > 0 else { return 0 }
@@ -77,9 +96,13 @@ final class PlayerModel {
 
     /// Replaces the playlist (Winamp's "Play file", LIST > LOAD) and optionally starts it.
     func load(_ urls: [URL], play: Bool) {
+        load(tracks: Self.tracks(from: urls), play: play)
+    }
+
+    func load(tracks: [TrackInfo], play: Bool) {
         stop()
         playlist.removeAll()
-        playlist.insert(Self.tracks(from: urls))
+        playlist.insert(tracks)
         playlist.setCurrent(playlist.isEmpty ? nil : 0)
         readTags()
         playlistChanged()
@@ -88,7 +111,12 @@ final class PlayerModel {
 
     /// Adds files, folders and playlist files at `index` (the end when nil).
     func add(_ urls: [URL], at index: Int? = nil) {
-        let range = playlist.insert(Self.tracks(from: urls), at: index)
+        add(tracks: Self.tracks(from: urls), at: index)
+    }
+
+    /// Adds tracks (Winamp's "Enqueue") at `index` (the end when nil).
+    func add(tracks: [TrackInfo], at index: Int? = nil) {
+        let range = playlist.insert(tracks, at: index)
         if currentIndex == nil, !range.isEmpty { playlist.setCurrent(range.lowerBound) }
         readTags()
         playlistChanged()
@@ -114,8 +142,12 @@ final class PlayerModel {
         }
     }
 
-    /// Tags are read in the background; the list shows names meanwhile.
+    /// Tags of local files are read in the background; the list shows names
+    /// meanwhile. Remote entries already carry their tags.
     private func readTags() {
+        for entry in playlist.entries where !entry.infoLoaded && !entry.url.isFileURL {
+            playlist.update(entry.info)
+        }
         let pending = playlist.entries.filter { !$0.infoLoaded }.map(\.info)
         guard !pending.isEmpty else { return }
         Task.detached(priority: .userInitiated) {
@@ -153,6 +185,7 @@ final class PlayerModel {
     }
 
     func pause() {
+        guard buffering == nil else { return stop() }
         switch status {
         case .playing: engine.pause()
         case .paused: engine.resume()
@@ -161,6 +194,9 @@ final class PlayerModel {
     }
 
     func stop() {
+        loadTask?.cancel()
+        prefetchTask?.cancel()
+        buffering = nil
         engine.stop()
         queuedID = nil
         status = .stopped
@@ -170,30 +206,81 @@ final class PlayerModel {
     func next() { step(by: 1) }
     func previous() { step(by: -1) }
 
-    /// Plays an entry; entries that fail are skipped (at most once around the list).
+    /// Plays an entry. Remote entries (Navidrome) start once enough of them
+    /// has downloaded, showing the buffering progress, and keep downloading
+    /// into the cache as they play. Entries that fail are skipped, at most
+    /// once around the list.
     func play(trackAt index: Int, attempts: Int = 0) {
         guard playlist.entries.indices.contains(index), attempts < playlist.count else {
             stop()
             return
         }
+        loadTask?.cancel()
         playlist.setCurrent(index)
-        do {
-            try engine.play(playlist[index].url)
-            nowPlayingURL = playlist[index].url
-            status = .playing
-            requeue()
-        } catch {
-            onError?("Can't play “\(playlist[index].info.displayName)”: \(error.localizedDescription)")
-            let next = (index + 1) % playlist.count
-            play(trackAt: next, attempts: attempts + 1)
+        let entry = playlist[index]
+        guard let resolver, resolver.handles(entry.url) else {
+            start(entry, .file(entry.url), attempts: attempts)
             return
         }
+        if let cached = resolver.cachedFile(for: entry.url) {
+            start(entry, .file(cached), attempts: attempts)
+            return
+        }
+        prefetchTask?.cancel()
+        engine.stop()
+        queuedID = nil
+        buffering = 0
+        nowPlayingURL = entry.url
+        status = .playing
         changed()
+        loadTask = Task { [weak self] in
+            do {
+                let source = try await resolver.prepare(entry.url) { [weak self] value in
+                    guard let self, self.buffering != nil, self.playlist.currentID == entry.id else { return }
+                    self.buffering = value
+                    self.changed()
+                }
+                guard let self, !Task.isCancelled, self.buffering != nil, self.playlist.currentID == entry.id else { return }
+                self.start(entry, source, attempts: attempts)
+            } catch {
+                guard let self, !Task.isCancelled, self.playlist.currentID == entry.id else { return }
+                self.buffering = nil
+                self.failed(entry, index: index, attempts: attempts, error: error)
+            }
+        }
+    }
+
+    private func start(_ entry: PlaylistEntry, _ source: PlayableSource, attempts: Int) {
+        buffering = nil
+        do {
+            try engine.play(source)
+            localFiles[entry.id] = source.url
+            nowPlayingURL = entry.url
+            status = .playing
+            // play(_:) already dropped the old queue; clearing it again could
+            // remove the new track before the decoder has picked it up.
+            requeue(clearingQueue: false)
+            changed()
+        } catch {
+            failed(entry, index: playlist.entries.firstIndex { $0.id == entry.id } ?? 0, attempts: attempts, error: error)
+        }
+    }
+
+    private func failed(_ entry: PlaylistEntry, index: Int, attempts: Int, error: Error) {
+        onError?("Can't play “\(entry.info.displayName)”: \(error.localizedDescription)")
+        play(trackAt: (index + 1) % max(1, playlist.count), attempts: attempts + 1)
     }
 
     func seek(to fraction: Double) {
-        guard status != .stopped else { return }
-        engine.seek(to: fraction)
+        guard status != .stopped, buffering == nil else { return }
+        if !engine.seek(to: fraction) {
+            // A stream can't seek; once its download is complete the cached file takes over.
+            guard let index = currentIndex, let resolver, resolver.handles(playlist[index].url),
+                let file = localFiles[playlist[index].id], FileManager.default.fileExists(atPath: file.path),
+                (try? engine.play(file, from: fraction)) != nil
+            else { return }
+            requeue(clearingQueue: false)
+        }
         changed()
     }
 
@@ -217,28 +304,63 @@ final class PlayerModel {
         return repeatEnabled ? 0 : nil
     }
 
-    /// Re-queues the follower of the current track (after the playlist or play order changed).
-    private func requeue() {
-        guard status != .stopped else { return }
-        engine.clearQueue()
-        let next = followingIndex()
-        queuedID = next.map { playlist[$0].id }
-        if let next { try? engine.enqueue(playlist[next].url) }
+    /// Re-queues the follower of the current track (after the playlist or
+    /// play order changed). Remote followers start downloading ahead of time.
+    private func requeue(clearingQueue: Bool = true) {
+        guard status != .stopped, buffering == nil else { return }
+        if clearingQueue { engine.clearQueue() }
+        prefetchTask?.cancel()
+        guard let next = followingIndex() else {
+            queuedID = nil
+            return
+        }
+        let entry = playlist[next]
+        queuedID = entry.id
+        guard let resolver, resolver.handles(entry.url) else {
+            try? engine.enqueue(entry.url)
+            return
+        }
+        if let cached = resolver.cachedFile(for: entry.url) {
+            localFiles[entry.id] = cached
+            try? engine.enqueue(cached)
+            return
+        }
+        prefetchTask = Task { [weak self] in
+            guard let source = try? await resolver.prepare(entry.url, progress: { _ in }) else { return }
+            guard let self, !Task.isCancelled, self.queuedID == entry.id else { return }
+            self.localFiles[entry.id] = source.url
+            try? self.engine.enqueue(source)
+        }
+    }
+
+    /// The entry behind a file the engine reports (queued one first: URLs may repeat).
+    private func entryIndex(playing file: URL) -> Int? {
+        func plays(_ id: UUID?, _ index: Int?) -> Bool {
+            guard let id, let index else { return false }
+            return (localFiles[id] ?? playlist[index].url) == file
+        }
+        let queuedIndex = queuedID.flatMap { id in playlist.entries.firstIndex { $0.id == id } }
+        if plays(queuedID, queuedIndex) { return queuedIndex }
+        if plays(playlist.currentID, currentIndex) { return currentIndex }
+        return playlist.entries.firstIndex { (localFiles[$0.id] ?? $0.url) == file }
     }
 
     // MARK: - Engine events
 
+    /// Debug hook (self test).
+    var onEngineEvent: ((AudioEngine.Event) -> Void)?
+
     private func handle(_ event: AudioEngine.Event) {
+        onEngineEvent?(event)
         switch event {
-        case .nowPlaying(let url?):
-            nowPlayingURL = url
-            // The queued entry took over (URLs may repeat, so prefer it).
-            if let queuedID, let index = playlist.entries.firstIndex(where: { $0.id == queuedID }), playlist[index].url == url {
+        case .nowPlaying(let file?):
+            if let index = entryIndex(playing: file) {
+                let changedTrack = index != currentIndex || playlist[index].id == queuedID
                 playlist.setCurrent(index)
-                requeue()
-            } else if currentTrack?.url != url, let index = playlist.entries.firstIndex(where: { $0.url == url }) {
-                playlist.setCurrent(index)
-                requeue()
+                nowPlayingURL = playlist[index].url
+                if changedTrack { requeue() }
+            } else {
+                nowPlayingURL = file
             }
         case .nowPlaying(nil):
             break
@@ -246,11 +368,14 @@ final class PlayerModel {
             switch state {
             case .playing: status = .playing
             case .paused: status = .paused
+            case .stopped where buffering != nil: break  // waiting for a download, not stopped
             case .stopped: status = .stopped
             }
         case .endOfAudio:
-            status = .stopped
-            queuedID = nil
+            if buffering == nil {
+                status = .stopped
+                queuedID = nil
+            }
         case .error(let message):
             onError?(message)
         }

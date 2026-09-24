@@ -30,6 +30,8 @@ targets:
         product: PlayerCore
       - package: HagtampKit
         product: AudioCore
+      - package: HagtampKit
+        product: NavidromeKit
     info:
       path: App/Info.plist
       properties:

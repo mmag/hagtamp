@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 @MainActor
 final class WindowManager: NSObject {
     let model: PlayerModel
+    let navidrome: NavidromeService
     let cursors = CursorController()
     private(set) var skin: Skin
     var onSkinChange: ((Skin) -> Void)?
@@ -23,9 +24,14 @@ final class WindowManager: NSObject {
     private(set) lazy var equalizer = EqualizerWindowController(manager: self)
     private(set) lazy var playlist = PlaylistWindowController(manager: self)
     private(set) lazy var albumArt = AlbumArtWindowController(manager: self)
-    private var controllers: [SkinWindowController] { [main, equalizer, playlist, albumArt] }
-    private var visible: Set<WindowID> =
-        Storage.defaults.bool(forKey: "albumArtVisible") ? [.main, .equalizer, .playlist, .albumArt] : [.main, .equalizer, .playlist]
+    private(set) lazy var mediaLibrary = MediaLibraryWindowController(manager: self)
+    private var controllers: [SkinWindowController] { [main, equalizer, playlist, albumArt, mediaLibrary] }
+    private var visible: Set<WindowID> = {
+        var ids: Set<WindowID> = [.main, .equalizer, .playlist]
+        if Storage.defaults.bool(forKey: "albumArtVisible") { ids.insert(.albumArt) }
+        if Storage.defaults.bool(forKey: "mediaLibraryVisible") { ids.insert(.mediaLibrary) }
+        return ids
+    }()
 
     private var uiTimer: Timer?
     private var displayLink: CADisplayLink?
@@ -43,9 +49,10 @@ final class WindowManager: NSObject {
     }
     private var move: (start: NSPoint, moving: [WindowBox], stationary: [WindowBox])?
 
-    init(model: PlayerModel, skin: Skin) {
+    init(model: PlayerModel, skin: Skin, navidrome: NavidromeService) {
         self.model = model
         self.skin = skin
+        self.navidrome = navidrome
         super.init()
         cursors.load(skin)
         model.onChange = { [weak self] in self?.playerChanged() }
@@ -64,6 +71,7 @@ final class WindowManager: NSObject {
         case .equalizer: equalizer
         case .playlist: playlist
         case .albumArt: albumArt
+        case .mediaLibrary: mediaLibrary
         }
     }
 
@@ -81,7 +89,9 @@ final class WindowManager: NSObject {
             setFrame(c, WindowBox(c.id, x: left, y: y, width: w * scale, height: h * scale))
             y += h * scale
         }
-        placeAlbumArtBesideMain()
+        for c in [albumArt, mediaLibrary] as [SkinWindowController] where visible.contains(c.id) {
+            placeBesideMain(c)
+        }
         render()
         for c in controllers.reversed() where visible.contains(c.id) { c.window.orderFront(nil) }
         main.window.makeKeyAndOrderFront(nil)
@@ -250,16 +260,32 @@ final class WindowManager: NSObject {
 
     @objc func toggleAlbumArt() {
         let show = !isVisible(.albumArt)
-        if show && albumArt.window.frame.width == 0 { placeAlbumArtBesideMain() }
+        if show && albumArt.window.frame.width == 0 { placeBesideMain(albumArt) }
         setVisible(.albumArt, show)
         Storage.defaults.set(show, forKey: "albumArtVisible")
     }
 
-    /// Docks the album art window to the right of the main window.
-    private func placeAlbumArtBesideMain() {
+    @objc func toggleMediaLibrary() {
+        let show = !isVisible(.mediaLibrary)
+        if show && mediaLibrary.window.frame.width == 0 { placeBesideMain(mediaLibrary) }
+        setVisible(.mediaLibrary, show)
+        Storage.defaults.set(show, forKey: "mediaLibraryVisible")
+        if show { mediaLibrary.window.makeKey() }
+    }
+
+    /// First showing of an extra window: docked to the right of the main
+    /// window, after any windows already there.
+    private func placeBesideMain(_ c: SkinWindowController) {
         let mainBox = box(main)
-        let (w, h) = albumArt.pixelSize()
-        setFrame(albumArt, WindowBox(.albumArt, x: mainBox.right, y: mainBox.y, width: w * scale, height: h * scale))
+        let (w, h) = c.pixelSize()
+        var candidate = WindowBox(c.id, x: mainBox.right, y: mainBox.y, width: w * scale, height: h * scale)
+        let others = visibleBoxes().filter { $0.id != c.id && $0.id != .main }
+        while let blocker = others.first(where: { o in
+            o.x < candidate.right && candidate.x < o.right && o.y < candidate.bottom && candidate.y < o.bottom
+        }) {
+            candidate.x = blocker.right
+        }
+        setFrame(c, candidate)
     }
     @objc func togglePlaylist() { setVisible(.playlist, !isVisible(.playlist)) }
 
@@ -353,6 +379,7 @@ final class WindowManager: NSObject {
 
     var marqueeText: String {
         if let marqueeMessage { return marqueeMessage }
+        if let buffering = model.buffering { return "Buffering: \(Int(buffering * 100))%" }
         guard let track = model.displayedTrack else { return Self.idleTitle }
         let length = model.duration.map { " (\(Marquee.timeString(Int($0))))" } ?? ""
         let number = model.currentIndex.map { "\($0 + 1). " } ?? ""
@@ -388,6 +415,9 @@ final class WindowManager: NSObject {
     }
 
     private func uiTick() {
+        navidrome.updateScrobbling(
+            url: model.nowPlayingURL, playing: model.status == .playing && model.buffering == nil,
+            elapsed: model.elapsed, duration: model.duration)
         let text = marqueeText
         if text != marqueeTrackText, marqueeMessage == nil {
             marqueeTrackText = text
@@ -417,10 +447,12 @@ final class WindowManager: NSObject {
         menu.addItem(item("Playlist Editor", #selector(togglePlaylist), on: isVisible(.playlist)))
         menu.addItem(item("Equalizer", #selector(toggleEqualizer), on: isVisible(.equalizer)))
         menu.addItem(item("Album Art", #selector(toggleAlbumArt), on: isVisible(.albumArt)))
+        menu.addItem(item("Media Library", #selector(toggleMediaLibrary), on: isVisible(.mediaLibrary)))
         menu.addItem(.separator())
         let skins = NSMenu()
         skins.addItem(item("Open Skin…", #selector(AppDelegate.openSkin(_:)), target: NSApp.delegate as AnyObject))
         skins.addItem(item("Base Skin", #selector(AppDelegate.useBaseSkin(_:)), target: NSApp.delegate as AnyObject))
+        menu.addItem(item("Preferences…", #selector(AppDelegate.showPreferences(_:)), target: NSApp.delegate as AnyObject))
         let skinsItem = NSMenuItem(title: "Skins", action: nil, keyEquivalent: "")
         skinsItem.submenu = skins
         menu.addItem(skinsItem)

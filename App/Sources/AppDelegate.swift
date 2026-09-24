@@ -7,9 +7,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let lastSkinKey = "lastSkinPath"
 
     private let model = PlayerModel()
-    private lazy var windows = WindowManager(model: model, skin: .base)
+    private let navidrome = NavidromeService()
+    private lazy var windows = WindowManager(model: model, skin: .base, navidrome: navidrome)
+    private lazy var preferences = PreferencesWindowController(navidrome: navidrome)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        model.resolver = navidrome
         NSApp.mainMenu = makeMainMenu()
         if let path = Storage.defaults.string(forKey: Self.lastSkinKey) {
             loadSkin(from: URL(fileURLWithPath: path), remember: false)
@@ -49,6 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         loadSkin(from: url)
     }
 
+    @objc func showPreferences(_ sender: Any?) {
+        preferences.show()
+    }
+
     @objc func useBaseSkin(_ sender: Any?) {
         windows.setSkin(.base)
         Storage.defaults.removeObject(forKey: Self.lastSkinKey)
@@ -61,6 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Hagtamp", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Preferences…", action: #selector(showPreferences(_:)), keyEquivalent: ",")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Hagtamp", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(.separator())
@@ -77,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(target: windows, "Playlist Editor", #selector(WindowManager.togglePlaylist), key: "e", modifiers: .option)
         viewMenu.addItem(target: windows, "Equalizer", #selector(WindowManager.toggleEqualizer), key: "g", modifiers: .option)
         viewMenu.addItem(target: windows, "Album Art", #selector(WindowManager.toggleAlbumArt), key: "a", modifiers: .option)
+        viewMenu.addItem(target: windows, "Media Library", #selector(WindowManager.toggleMediaLibrary), key: "l", modifiers: .option)
         viewMenu.addItem(.separator())
         viewMenu.addItem(target: windows, "Double Size", #selector(WindowManager.toggleDoubleSize), key: "d", modifiers: .command)
         viewMenu.addItem(target: windows, "Always On Top", #selector(WindowManager.toggleAlwaysOnTop), key: "a", modifiers: .control)

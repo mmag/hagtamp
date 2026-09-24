@@ -27,9 +27,22 @@ enum SelfTest {
 
         Task { @MainActor in
             checkPresetMenu(manager)
+            (NSApp.delegate as? AppDelegate)?.showPreferences(nil)
+            if let prefs = NSApp.windows.first(where: { $0.title == "Preferences" }) {
+                print("selftest: preferences window content=\(prefs.contentView?.frame.size ?? .zero) fitting=\(prefs.contentView?.fittingSize ?? .zero)")
+                if let view = prefs.contentView {
+                    view.layoutSubtreeIfNeeded()
+                    if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                        view.cacheDisplay(in: view.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: output.appendingPathComponent("preferences.png"))
+                    }
+                }
+                prefs.close()
+            }
             checkRaising(manager)
             await audioSteps(manager, snap: snap)
             await playlistSteps(manager, snap: snap)
+            await navidromeSteps(manager, snap: snap)
             uiSteps(manager, snap: snap)
             NSApp.terminate(nil)
         }
@@ -79,6 +92,16 @@ enum SelfTest {
         try? await Task.sleep(for: .milliseconds(300))
         snap("playing-oscilloscope")
         manager.visualizerSettings.mode = .analyzer
+
+        // Next while playing must keep playing.
+        model.onEngineEvent = { event in print("selftest: engine event \(event) status=\(model.status)") }
+        model.next()
+        try? await Task.sleep(for: .milliseconds(1200))
+        print("selftest: after next index=\(model.currentIndex ?? -1) status=\(model.status) engine=\(model.engine.state) elapsed=\(String(format: "%.2f", model.elapsed))")
+        model.previous()
+        try? await Task.sleep(for: .milliseconds(800))
+        print("selftest: after previous index=\(model.currentIndex ?? -1) status=\(model.status) engine=\(model.engine.state) elapsed=\(String(format: "%.2f", model.elapsed))")
+        model.onEngineEvent = nil
 
         model.seek(to: 0.97)
         try? await Task.sleep(for: .milliseconds(800))
@@ -161,6 +184,85 @@ enum SelfTest {
         var cover = Bitmap(width: 64, height: 64, fill: PixelColor(rgb: 0x2060C0))
         for y in stride(from: 0, to: 64, by: 8) { cover.fill(PixelRect(x: 0, y: y, width: 64, height: 4), with: PixelColor(rgb: 0xF0C040)) }
         try? cover.pngData().write(to: track.deletingLastPathComponent().appendingPathComponent("cover.png"))
+    }
+
+    /// Library browsing and playback against scripts/navidrome_dev.sh, when it runs.
+    /// HAGTAMP_SELFTEST_NAVIDROME points elsewhere (e.g. a throttling proxy, to stream for real).
+    private static func navidromeSteps(_ manager: WindowManager, snap: (String) -> Void) async {
+        let server = ProcessInfo.processInfo.environment["HAGTAMP_SELFTEST_NAVIDROME"].flatMap(URL.init(string:))
+            ?? URL(string: "http://localhost:4533")!
+        guard (try? await NavidromeService.test(url: server, username: "admin", password: "admin")) != nil else {
+            print("selftest: navidrome: local server not running, skipped")
+            return
+        }
+        let model = manager.model, library = manager.mediaLibrary
+        manager.navidrome.configure(url: server, username: "admin", password: "admin")
+        manager.toggleMediaLibrary()
+        func wait(_ what: String, seconds: Double = 8, until done: () -> Bool) async {
+            let deadline = Date().addingTimeInterval(seconds)
+            while !done() && Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
+            print("selftest: navidrome \(what): \(done() ? "ok" : "TIMEOUT")")
+        }
+        await wait("artists") { library.summary.contains("artists=2") }
+        print("selftest: library \(library.summary)")
+        snap("library-artists")
+
+        library.selectForTesting(row: 0, in: 0)
+        await wait("artist albums and songs") { library.summary.contains("albums=2") && library.summary.contains("songs=6") }
+        print("selftest: library \(library.summary)")
+        snap("library-artist")
+
+        // Other views through the sidebar, and a search typed on the keyboard.
+        func clickSidebar(_ row: Int) {
+            let point = SkinPoint(x: 30, y: 20 + row * 13 + 6)
+            library.mouseDown(at: point, event: event(.leftMouseDown, library))
+            library.mouseUp(at: point, event: event(.leftMouseUp, library))
+        }
+        clickSidebar(1)
+        await wait("recently added") { library.summary.contains("albums=4") }
+        clickSidebar(2)
+        await wait("playlists") { library.summary.contains("view=Playlists") && !library.summary.contains("Loading") }
+        print("selftest: library \(library.summary)")
+        let field = SkinPoint(x: 11 + 96 + 3 + 60, y: 27)
+        library.mouseDown(at: field, event: event(.leftMouseDown, library))
+        library.mouseUp(at: field, event: event(.leftMouseUp, library))
+        for character in "beta" {
+            _ = library.keyDown(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: library.window.windowNumber,
+                context: nil, characters: String(character), charactersIgnoringModifiers: String(character), isARepeat: false, keyCode: 0)!)
+        }
+        _ = library.keyDown(key(36, library))
+        await wait("search") { library.summary.contains("artists=1") && library.summary.contains("songs=6") }
+        print("selftest: library \(library.summary)")
+        snap("library-search")
+        clickSidebar(0)
+        await wait("library again") { library.summary.contains("artists=2") }
+        library.selectForTesting(row: 0, in: 0)
+        await wait("artist songs again") { library.summary.contains("songs=6") }
+
+        library.playAllForTesting()
+        await wait("buffering done", seconds: 30) { model.buffering == nil && model.status == .playing && model.elapsed > 0.3 }
+        // Not seekable yet means it started as a stream, before the download completed.
+        print("selftest: navidrome playing index=\(model.currentIndex ?? -1) status=\(model.status) elapsed=\(String(format: "%.2f", model.elapsed)) seekable=\(model.engine.canSeek) title=\(model.displayedTrack?.displayName ?? "-") marquee=\(manager.marqueeText)")
+        // Seeking works once the track is in the cache (a stream can't seek; the cached file takes over).
+        let first = model.playlist[0].url
+        await wait("first track cached", seconds: 30) { manager.navidrome.cachedFile(for: first) != nil }
+        model.seek(to: 0.6)
+        await wait("remote seek") { model.currentIndex == 0 && model.elapsed > (model.duration ?? 25) * 0.55 }
+        print("selftest: navidrome seek elapsed=\(String(format: "%.2f", model.elapsed)) duration=\(String(format: "%.2f", model.duration ?? -1))")
+        let next = model.playlist.count > 1 ? model.playlist[1].url : nil
+        await wait("next track prefetched", seconds: 30) { next.flatMap(manager.navidrome.cachedFile(for:)) != nil }
+        model.next()
+        await wait("next remote track playing") { model.currentIndex == 1 && model.status == .playing && model.buffering == nil && model.elapsed > 0.3 }
+        model.next()  // not prefetched yet: buffers, then plays
+        await wait("third remote track playing", seconds: 30) { model.currentIndex == 2 && model.status == .playing && model.buffering == nil && model.elapsed > 0.3 }
+        print("selftest: navidrome after next index=\(model.currentIndex ?? -1) status=\(model.status) engine=\(model.engine.state) elapsed=\(String(format: "%.2f", model.elapsed))")
+        manager.toggleAlbumArt()
+        await wait("remote cover") { manager.albumArt.hasCover }
+        snap("library-playing")
+        manager.toggleAlbumArt()
+        model.stop()
+        manager.toggleMediaLibrary()
     }
 
     private static func key(_ code: UInt16, _ c: SkinWindowController, modifiers: NSEvent.ModifierFlags = []) -> NSEvent {
@@ -267,7 +369,7 @@ enum SelfTest {
 
     /// All visible windows drawn at their screen positions over a grey backdrop.
     private static func snapshot(_ manager: WindowManager) -> Bitmap {
-        let windows = [manager.main, manager.equalizer, manager.playlist, manager.albumArt].filter { $0.window.isVisible }
+        let windows = [manager.main, manager.equalizer, manager.playlist, manager.albumArt, manager.mediaLibrary].filter { $0.window.isVisible }
         let union = windows.map(\.window.frame).reduce(NSRect.null) { $0.union($1) }.insetBy(dx: -8, dy: -8)
         var canvas = Bitmap(width: Int(union.width), height: Int(union.height), fill: PixelColor(rgb: 0x5A5A5A))
         for c in windows {
@@ -291,7 +393,7 @@ enum SelfTest {
     }
 
     private static func layout(_ manager: WindowManager) -> String {
-        [("main", manager.main), ("eq", manager.equalizer), ("pl", manager.playlist), ("art", manager.albumArt)].map { name, c in
+        [("main", manager.main), ("eq", manager.equalizer), ("pl", manager.playlist), ("art", manager.albumArt), ("ml", manager.mediaLibrary)].map { name, c in
             let f = c.window.frame
             return c.window.isVisible ? "\(name)=\(Int(f.minX)),\(Int(f.maxY)) \(Int(f.width))x\(Int(f.height))" : "\(name)=hidden"
         }.joined(separator: " ")

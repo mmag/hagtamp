@@ -4,6 +4,7 @@ import Foundation
 /// defaults domain and folder so it never touches the user's state.
 enum Storage {
     private static let selfTestDirectory = ProcessInfo.processInfo.environment["HAGTAMP_SELFTEST"]
+    static var isSelfTest: Bool { selfTestDirectory != nil }
 
     // UserDefaults is documented as thread-safe.
     nonisolated(unsafe) static let defaults: UserDefaults = {

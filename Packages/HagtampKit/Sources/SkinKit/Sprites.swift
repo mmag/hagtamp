@@ -277,6 +277,24 @@ extension Sprite {
         public static let listMenuBar = Sprite(.pledit, 250, 111, 3, 54)
     }
 
+    /// Controls of generic-window content (media library).
+    public enum GenEx {
+        public static let button = Sprite(.genex, 0, 0, 47, 15)
+        public static let buttonPressed = Sprite(.genex, 0, 15, 47, 15)
+        /// Caps and middle of a button stretched to any width.
+        public static let buttonCap = 4
+        public static let scrollUp = Sprite(.genex, 0, 31, 14, 14)
+        public static let scrollDown = Sprite(.genex, 14, 31, 14, 14)
+        public static let scrollUpPressed = Sprite(.genex, 28, 31, 14, 14)
+        public static let scrollDownPressed = Sprite(.genex, 42, 31, 14, 14)
+        public static let scrollLeft = Sprite(.genex, 0, 45, 14, 14)
+        public static let scrollRight = Sprite(.genex, 14, 45, 14, 14)
+        public static let verticalThumb = Sprite(.genex, 56, 31, 14, 28)
+        public static let verticalThumbPressed = Sprite(.genex, 70, 31, 14, 28)
+        public static let horizontalThumb = Sprite(.genex, 84, 31, 28, 14)
+        public static let horizontalThumbPressed = Sprite(.genex, 84, 45, 28, 14)
+    }
+
     public enum Gen {
         public static let topLeftActive = Sprite(.gen, 0, 0, 25, 20)
         public static let topLeftEndActive = Sprite(.gen, 26, 0, 25, 20)
