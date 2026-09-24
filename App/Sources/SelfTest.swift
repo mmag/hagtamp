@@ -2,6 +2,7 @@
 import AVFAudio
 import AppKit
 import ClassicUI
+import SFBAudioEngine
 import SkinKit
 
 /// Scripted walk through the UI for development, since window behaviour is
@@ -27,23 +28,16 @@ enum SelfTest {
 
         Task { @MainActor in
             checkPresetMenu(manager)
-            (NSApp.delegate as? AppDelegate)?.showPreferences(nil)
-            if let prefs = NSApp.windows.first(where: { $0.title == "Preferences" }) {
-                print("selftest: preferences window content=\(prefs.contentView?.frame.size ?? .zero) fitting=\(prefs.contentView?.fittingSize ?? .zero)")
-                if let view = prefs.contentView {
-                    view.layoutSubtreeIfNeeded()
-                    if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-                        view.cacheDisplay(in: view.bounds, to: rep)
-                        try? rep.representation(using: .png, properties: [:])?.write(to: output.appendingPathComponent("preferences.png"))
-                    }
-                }
-                prefs.close()
-            }
+            snapPreferences(to: output.appendingPathComponent("preferences.png"))
             checkRaising(manager)
             await audioSteps(manager, snap: snap)
+            await resumeSteps(manager)
             await playlistSteps(manager, snap: snap)
+            await localLibrarySteps(manager, snap: snap)
+            snapPreferences(to: output.appendingPathComponent("preferences-library.png"))
             await navidromeSteps(manager, snap: snap)
             uiSteps(manager, snap: snap)
+            layoutSteps(manager)
             NSApp.terminate(nil)
         }
     }
@@ -188,6 +182,116 @@ enum SelfTest {
 
     /// Library browsing and playback against scripts/navidrome_dev.sh, when it runs.
     /// HAGTAMP_SELFTEST_NAVIDROME points elsewhere (e.g. a throttling proxy, to stream for real).
+    /// With the option on, a relaunch continues the track where it was; Stop forgets the spot.
+    private static func resumeSteps(_ manager: WindowManager) async {
+        let model = manager.model
+        model.resumesPosition = true
+        model.play(trackAt: 0)
+        await wait("resume: playing") { model.status == .playing && model.elapsed > 0.2 }
+        model.seek(to: 0.6)
+        try? await Task.sleep(for: .milliseconds(300))
+        model.pause()
+        try? await Task.sleep(for: .milliseconds(100))
+        let saved = model.elapsed
+        model.savePosition(force: true)
+        model.relaunchForTesting()
+        model.play()
+        await wait("resume: continues where it was") { model.status == .playing && model.elapsed >= saved - 0.1 && model.elapsed < saved + 1 }
+        print("selftest: resume saved=\(String(format: "%.2f", saved)) now=\(String(format: "%.2f", model.elapsed))")
+        model.stop()
+        model.relaunchForTesting()
+        model.play()
+        await wait("resume: stop forgets the spot") { model.status == .playing && model.elapsed > 0.05 && model.elapsed < saved - 0.5 }
+        model.stop()
+        model.resumesPosition = false
+    }
+
+    /// The layout comes back as it was saved: positions, shade, sizes, visibility.
+    private static func layoutSteps(_ manager: WindowManager) {
+        manager.saveLayout()
+        let saved = layout(manager)
+        manager.equalizer.shade.toggle()
+        manager.nudgeForTesting(.playlist, dx: 40, dy: 30)
+        manager.render()
+        let disturbed = layout(manager)
+        manager.applySavedLayout()
+        manager.render()
+        let restored = layout(manager)
+        print("selftest: layout restored: \(restored == saved && disturbed != saved ? "ok" : "MISMATCH")")
+        if restored != saved { print("selftest: saved    \(saved)\nselftest: restored \(restored)") }
+    }
+
+    private static func snapPreferences(to file: URL) {
+        (NSApp.delegate as? AppDelegate)?.showPreferences(nil)
+        guard let prefs = NSApp.windows.first(where: { $0.title == "Preferences" }) else { return }
+        print("selftest: preferences window content=\(prefs.contentView?.frame.size ?? .zero) fitting=\(prefs.contentView?.fittingSize ?? .zero)")
+        if let view = prefs.contentView {
+            view.layoutSubtreeIfNeeded()
+            if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: file)
+            }
+        }
+        prefs.close()
+    }
+
+    private static func wait(_ what: String, seconds: Double = 8, until done: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !done() && Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
+        print("selftest: \(what): \(done() ? "ok" : "TIMEOUT")")
+    }
+
+    /// The local library: tagged FLAC files in a folder, scanned, browsed, searched and played.
+    private static func localLibrarySteps(_ manager: WindowManager, snap: (String) -> Void) async {
+        let music = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-selftest-music")
+        try? FileManager.default.removeItem(at: music)
+        let tracks: [(path: String, title: String, artist: String, album: String, number: Int)] = [
+            ("Delta/Dawn/01 Morning.flac", "Morning", "Delta", "Dawn", 1),
+            ("Delta/Dawn/02 Noon.flac", "Noon", "Delta", "Dawn", 2),
+            ("Echo/Evening/01 Dusk.flac", "Dusk", "Echo", "Evening", 1),
+        ]
+        for (i, track) in tracks.enumerated() {
+            let url = music.appendingPathComponent(track.path)
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            guard let wav = makeTone(frequency: 440 + Double(i) * 110, name: "library-\(i)", seconds: 2) else { continue }
+            try? AudioConverter.convert(wav, to: url)
+            if let file = try? AudioFile(readingPropertiesAndMetadataFrom: url) {
+                file.metadata.title = track.title
+                file.metadata.artist = track.artist
+                file.metadata.albumTitle = track.album
+                file.metadata.trackNumber = track.number
+                try? file.writeMetadata()
+            }
+        }
+
+        let model = manager.model, service = manager.localLibraryService, library = manager.localLibrary
+        manager.toggleLocalLibrary()
+        await wait("local library empty") { library.summary.contains("No folders") }
+        snap("local-empty")
+        service.setFolders([music])
+        await wait("local library scanned") { library.summary.contains("artists=2") && service.progress == nil }
+        print("selftest: local \(library.summary)")
+        snap("local-artists")
+        library.selectForTesting(row: 0, in: 0)
+        await wait("local artist") { library.summary.contains("albums=1 ") && library.summary.contains("songs=2 ") }
+        print("selftest: local \(library.summary)")
+        snap("local-artist")
+        library.searchForTesting("dusk")
+        await wait("local search") { library.summary.contains("songs=1 ") && library.summary.contains("artists=0 ") }
+        print("selftest: local \(library.summary)")
+        library.searchForTesting("")
+        library.chooseViewForTesting(1)
+        await wait("local recently added") { library.summary.contains("view=Recently Added") && library.summary.contains("albums=2 ") }
+        library.selectForTesting(row: 0, in: 0)
+        await wait("recent album tracks") { library.summary.contains("songs=") && !library.summary.contains("songs=0 ") }
+        library.playAllForTesting()
+        await wait("local playing") { model.status == .playing && model.elapsed > 0.2 }
+        print("selftest: local playing \(model.displayedTrack?.displayName ?? "-") of \(model.playlist.count)")
+        snap("local-playing")
+        model.stop()
+        manager.toggleLocalLibrary()
+    }
+
     private static func navidromeSteps(_ manager: WindowManager, snap: (String) -> Void) async {
         let server = ProcessInfo.processInfo.environment["HAGTAMP_SELFTEST_NAVIDROME"].flatMap(URL.init(string:))
             ?? URL(string: "http://localhost:4533")!
@@ -195,13 +299,15 @@ enum SelfTest {
             print("selftest: navidrome: local server not running, skipped")
             return
         }
-        let model = manager.model, library = manager.mediaLibrary
+        let model = manager.model, library = manager.navidromeLibrary
         manager.navidrome.configure(url: server, username: "admin", password: "admin")
-        manager.toggleMediaLibrary()
+        let credentialsFile = Storage.supportDirectory.appendingPathComponent("credentials.json")
+        let saved = (try? String(contentsOf: credentialsFile, encoding: .utf8)) ?? ""
+        let permissions = (try? FileManager.default.attributesOfItem(atPath: credentialsFile.path)[.posixPermissions] as? Int) ?? 0
+        print("selftest: navidrome login saved as a token: \(saved.contains("token") && !saved.contains("password") ? "ok" : "FAIL") permissions=\(String(permissions, radix: 8))")
+        manager.toggleNavidromeLibrary()
         func wait(_ what: String, seconds: Double = 8, until done: () -> Bool) async {
-            let deadline = Date().addingTimeInterval(seconds)
-            while !done() && Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
-            print("selftest: navidrome \(what): \(done() ? "ok" : "TIMEOUT")")
+            await SelfTest.wait("navidrome \(what)", seconds: seconds, until: done)
         }
         await wait("artists") { library.summary.contains("artists=2") }
         print("selftest: library \(library.summary)")
@@ -218,11 +324,47 @@ enum SelfTest {
             library.mouseDown(at: point, event: event(.leftMouseDown, library))
             library.mouseUp(at: point, event: event(.leftMouseUp, library))
         }
-        clickSidebar(1)
-        await wait("recently added") { library.summary.contains("albums=4") }
+        // Favourites: star an album and a song on the server, list them, unstar them again.
+        if let client = manager.navidrome.client, let albums = try? await client.albumList(.alphabeticalByName), albums.count > 1,
+            let song = try? await client.album(albums[0].id).song?.first
+        {
+            try? await client.setStarred(true, .album(albums[1].id))
+            try? await client.setStarred(true, .song(song.id))
+            clickSidebar(1)
+            await wait("favourites") {
+                library.summary.contains("view=Favourites") && library.summary.contains("albums=1 ") && library.summary.contains("songs=1 ")
+            }
+            print("selftest: library \(library.summary)")
+            snap("library-favourites")
+            try? await client.setStarred(false, .album(albums[1].id))
+            try? await client.setStarred(false, .song(song.id))
+            clickSidebar(1)  // clicking again refreshes
+            await wait("favourites refreshed") { library.summary.contains("albums=0 ") && library.summary.contains("songs=0 ") }
+        }
         clickSidebar(2)
+        await wait("recently added") { library.summary.contains("albums=4") }
+        clickSidebar(3)
         await wait("playlists") { library.summary.contains("view=Playlists") && !library.summary.contains("Loading") }
         print("selftest: library \(library.summary)")
+
+        // Radio: a station on the server; a song streamed as MP3 stands in for a broadcast.
+        if let client = manager.navidrome.client, let album = try? await client.albumList(.alphabeticalByName).first,
+            let song = try? await client.album(album.id).song?.first
+        {
+            let name = "Hagtamp Test FM"
+            try? await client.createRadioStation(name: name, streamURL: client.streamURL(songID: song.id, format: "mp3", maxBitRate: 128))
+            clickSidebar(4)
+            await wait("radio stations") { library.summary.contains("view=Radio") && !library.summary.contains("songs=0 ") }
+            print("selftest: library \(library.summary)")
+            snap("library-radio")
+            library.playAllForTesting()
+            await wait("radio playing", seconds: 15) { model.status == .playing && model.buffering == nil && model.elapsed > 0.5 }
+            print("selftest: radio playing \(model.displayedTrack?.displayName ?? "-") seekable=\(model.engine.canSeek) duration=\(model.duration ?? -1) marquee=\(manager.marqueeText)")
+            model.stop()
+            for station in (try? await client.radioStations()) ?? [] where station.name == name {
+                try? await client.deleteRadioStation(id: station.id)
+            }
+        }
         let field = SkinPoint(x: 11 + 96 + 3 + 60, y: 27)
         library.mouseDown(at: field, event: event(.leftMouseDown, library))
         library.mouseUp(at: field, event: event(.leftMouseUp, library))
@@ -262,7 +404,7 @@ enum SelfTest {
         snap("library-playing")
         manager.toggleAlbumArt()
         model.stop()
-        manager.toggleMediaLibrary()
+        manager.toggleNavidromeLibrary()
     }
 
     private static func key(_ code: UInt16, _ c: SkinWindowController, modifiers: NSEvent.ModifierFlags = []) -> NSEvent {
@@ -369,7 +511,7 @@ enum SelfTest {
 
     /// All visible windows drawn at their screen positions over a grey backdrop.
     private static func snapshot(_ manager: WindowManager) -> Bitmap {
-        let windows = [manager.main, manager.equalizer, manager.playlist, manager.albumArt, manager.mediaLibrary].filter { $0.window.isVisible }
+        let windows = [manager.main, manager.equalizer, manager.playlist, manager.albumArt, manager.navidromeLibrary, manager.localLibrary].filter { $0.window.isVisible }
         let union = windows.map(\.window.frame).reduce(NSRect.null) { $0.union($1) }.insetBy(dx: -8, dy: -8)
         var canvas = Bitmap(width: Int(union.width), height: Int(union.height), fill: PixelColor(rgb: 0x5A5A5A))
         for c in windows {
@@ -393,7 +535,7 @@ enum SelfTest {
     }
 
     private static func layout(_ manager: WindowManager) -> String {
-        [("main", manager.main), ("eq", manager.equalizer), ("pl", manager.playlist), ("art", manager.albumArt), ("ml", manager.mediaLibrary)].map { name, c in
+        [("main", manager.main), ("eq", manager.equalizer), ("pl", manager.playlist), ("art", manager.albumArt), ("nd", manager.navidromeLibrary), ("local", manager.localLibrary)].map { name, c in
             let f = c.window.frame
             return c.window.isVisible ? "\(name)=\(Int(f.minX)),\(Int(f.maxY)) \(Int(f.width))x\(Int(f.height))" : "\(name)=hidden"
         }.joined(separator: " ")

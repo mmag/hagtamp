@@ -4,16 +4,18 @@ Native macOS music player that reproduces Winamp 2.x (classic `.wsz` skins, as f
 
 ## Layout
 
-- `App/Sources` — AppKit app (borderless skinned windows). Xcode project is generated from `project.yml` by XcodeGen; `*.xcodeproj` is not committed.
+- `App/Sources` — AppKit app (borderless skinned windows). Both library windows are `LibraryWindowController` over a `LibrarySource` (`LocalLibraryService`, `NavidromeService` in `NavidromeLibrary.swift`). Xcode project is generated from `project.yml` by XcodeGen; `*.xcodeproj` is not committed.
 - `Packages/HagtampKit` — Swift package with the testable core:
   - `SkinKit` — skin loading: zip/folder access, BMP decoder, sprite table, `pledit.txt`/`viscolor.txt`/`region.txt`, TEXT.BMP font, base-skin fallback.
   - `ClassicUI` — `Rendering/`: pure functions `state -> Bitmap` for the main, equalizer and playlist windows (normal and shade); `Interaction/`: control hit areas, slider geometry, window docking/snapping math; `Visualization/`: Winamp's analyzer/oscilloscope; `ReferenceScene` + `ImageDiff` for golden comparisons.
   - `PlayerCore` — player domain without dependencies: `TrackInfo`, `Playlist` (order, Winamp selection, editing), `PlaylistFile` (m3u/m3u8/pls), equalizer presets, `.eqf` files.
   - `NavidromeKit` — Subsonic API client (`NavidromeClient`, response cache), `AudioCache` (LRU track cache; `stream` downloads into `<name>.part`, shared between playback and prefetch, renamed when complete), `NavidromeTrack` (`hagtamp-nd://song/<id>` playlist URLs).
-  - `StreamingInput` — Objective-C: `StreamingInputSource` (SFB input source reading a file that is still downloading; unseekable until complete) and `PositionedDecoder` (starts a decoder part way through, opened on the player's thread).
-  - `AudioCore` — playback on SFBAudioEngine: `AudioEngine` (gapless queue of files or `StreamingTrack`s, EQ, balance, volume, visualizer sample tap), `TrackInfo.read` (tags/properties).
+  - `LibraryKit` — local library: `LocalLibrary` (actor: scans folders, rereads only changed files, JSON index), `LibraryCatalog` (artists / albums / tracks grouping, search), `LibraryEntry` (tags of one file).
+  - `StreamingInput` — Objective-C: `StreamingInputSource` (SFB input source reading a file that is still downloading; unseekable until complete), `LiveInputSource` (internet radio, fed from memory), `AudioStreamDecoder` (AAC streams via AudioFileStream + AudioConverter) and `PositionedDecoder` (starts a decoder part way through, opened on the player's thread).
+  - `AudioCore` — playback on SFBAudioEngine: `AudioEngine` (gapless queue of files, `StreamingTrack`s and `LiveStream`s, EQ, balance, volume, visualizer sample tap), `LiveStream` (radio: HTTP, ICY titles, .pls/.m3u), `TrackInfo.read` (tags/properties).
   - `skintool` — CLI: `info`, `render`, `sheets` (decoded bitmaps as PNG), `gen` (generic window preview), `compare`.
-- `skins/` — test skins (`winamp.wsz` = the original Winamp 2.91 base skin, used by golden checks). The app's default skin is `SkinKit/Resources/hagtamp-base.wsz`, generated from it by `scripts/retitle_base_skin.py` (title lettering "HAGTAMP").
+- `skins/` — test skins (`winamp.wsz` = the original Winamp 2.91 base skin, used by golden checks). The app's default skin is `SkinKit/Resources/hagtamp-base.wsz`, generated from it by `scripts/retitle_base_skin.py` (title lettering "HAGTAMP", Hagtamp logo on the about button).
+- `art/` — the logo as pixel art, drawn by `scripts/make_logo.py`, which also builds the app icon (`App/Assets.xcassets/AppIcon.appiconset`). Edit the script, not the PNGs; then rerun `retitle_base_skin.py` for the skin's copy.
 - `reamp/` — Reamp.app, closed-source reference player (git-ignored). Use it to check Winamp behaviour, don't copy from it.
 - `.corpus/` — ~300 Skin Museum skins + reference screenshots (git-ignored, `make corpus`).
 

@@ -57,6 +57,13 @@ public struct NavidromePlaylist: Codable, Hashable, Sendable, Identifiable {
     public var entry: [NavidromeSong]?
 }
 
+public struct NavidromeRadioStation: Codable, Hashable, Sendable, Identifiable {
+    public var id: String
+    public var name: String
+    public var streamUrl: String
+    public var homePageUrl: String?
+}
+
 public struct NavidromeSearchResult: Codable, Hashable, Sendable {
     public var artist: [NavidromeArtist]?
     public var album: [NavidromeAlbum]?

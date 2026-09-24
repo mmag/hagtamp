@@ -1,7 +1,7 @@
 import SkinKit
 
-public enum WindowID: Hashable, Sendable, CaseIterable {
-    case main, equalizer, playlist, albumArt, mediaLibrary
+public enum WindowID: String, Hashable, Sendable, CaseIterable, Codable {
+    case main, equalizer, playlist, albumArt, navidromeLibrary, localLibrary
 }
 
 /// A window's frame in global top-left coordinates (y grows downwards), in points.
@@ -159,5 +159,31 @@ public enum WindowDocking {
             maxY = max(maxY, b.bottom)
         }
         return WindowBox(first.id, x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    /// Whether a window can be grabbed on some screen: at least 30 x 8 points
+    /// of its title bar (the top 14) lie on it.
+    public static func isReachable(_ box: WindowBox, screens: [WindowBox]) -> Bool {
+        screens.contains { screen in
+            let width = min(box.right, screen.right) - max(box.x, screen.x)
+            let height = min(box.y + min(14, box.height), screen.bottom) - max(box.y, screen.y)
+            return width >= 30 && height >= 8
+        }
+    }
+
+    /// Saved windows on today's screens. When the main window can't be
+    /// reached (its screen is gone), every window moves with it so that it
+    /// lands at `home`, keeping docked windows docked. Windows still out of
+    /// reach after that are left out of `placed` for the caller to put back.
+    public static func restore(
+        _ windows: [WindowBox], screens: [WindowBox], home: (x: Int, y: Int)
+    ) -> (placed: [WindowBox], unreachable: [WindowID]) {
+        var windows = windows
+        if let main = windows.first(where: { $0.id == .main }), !isReachable(main, screens: screens) {
+            let dx = home.x - main.x, dy = home.y - main.y
+            windows = windows.map { $0.offsetBy(dx: dx, dy: dy) }
+        }
+        let placed = windows.filter { isReachable($0, screens: screens) }
+        return (placed, windows.filter { !isReachable($0, screens: screens) }.map(\.id))
     }
 }

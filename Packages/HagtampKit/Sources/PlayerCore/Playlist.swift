@@ -88,10 +88,11 @@ public struct Playlist: Sendable {
     // MARK: - Editing
 
     /// Inserts tracks at `index` (the end when nil); returns where they landed.
+    /// `infoLoaded`: the tags are complete, nothing to read from the files.
     @discardableResult
-    public mutating func insert(_ tracks: [TrackInfo], at index: Int? = nil) -> Range<Int> {
+    public mutating func insert(_ tracks: [TrackInfo], at index: Int? = nil, infoLoaded: Bool = false) -> Range<Int> {
         let at = min(max(0, index ?? entries.count), entries.count)
-        entries.insert(contentsOf: tracks.map { PlaylistEntry($0) }, at: at)
+        entries.insert(contentsOf: tracks.map { PlaylistEntry($0, infoLoaded: infoLoaded) }, at: at)
         anchor = nil
         return at..<at + tracks.count
     }

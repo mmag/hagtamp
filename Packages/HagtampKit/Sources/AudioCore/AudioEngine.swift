@@ -32,7 +32,7 @@ public final class AudioEngine {
     /// them. A stream's reader is cancelled once the player is done with it,
     /// so a decoder waiting for data never holds up the next track. (Holding
     /// the decoders keeps their identities unique.)
-    private var handedOut: [(decoder: any PCMDecoding, stream: StreamingTrack?)] = []
+    private var handedOut: [(decoder: any PCMDecoding, release: (@Sendable () -> Void)?)] = []
 
     public init() {
         graph = ProcessingGraph(samples: samples)
@@ -67,7 +67,7 @@ public final class AudioEngine {
         let decoder = try source.decoder()
         try player.play(decoder)
         releaseAll()
-        handedOut = [(decoder, source.stream)]
+        handedOut = [(decoder, source.release)]
     }
 
     /// Starts a file at `fraction` of its length, dropping anything queued;
@@ -87,7 +87,7 @@ public final class AudioEngine {
     public func enqueue(_ source: PlayableSource) throws {
         let decoder = try source.decoder()
         try player.enqueue(decoder)
-        handedOut.append((decoder, source.stream))
+        handedOut.append((decoder, source.release))
     }
 
     /// Drops queued tracks the player hasn't started decoding. (Their
@@ -107,14 +107,14 @@ public final class AudioEngine {
     }
 
     private func releaseAll() {
-        for entry in handedOut { entry.stream?.cancel() }
+        for entry in handedOut { entry.release?() }
         handedOut = []
     }
 
     /// The player moved on to `decoder`: everything handed out before it is done.
     private func released(before decoder: ObjectIdentifier) {
         guard let index = handedOut.firstIndex(where: { ObjectIdentifier($0.decoder) == decoder }) else { return }
-        for entry in handedOut[..<index] { entry.stream?.cancel() }
+        for entry in handedOut[..<index] { entry.release?() }
         handedOut.removeFirst(index)
     }
 

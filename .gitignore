@@ -28,3 +28,6 @@ reamp/
 
 # Local Navidrome for development (scripts/navidrome_dev.sh)
 .navidrome-dev/
+
+# Python
+__pycache__/

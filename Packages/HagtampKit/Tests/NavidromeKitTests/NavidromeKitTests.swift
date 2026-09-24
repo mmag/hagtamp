@@ -26,6 +26,18 @@ private func fixture(_ name: String) throws -> Data {
         #expect(query["t"] == token)
     }
 
+    @Test func savedTokensAuthenticateWithoutThePassword() throws {
+        let saved = NavidromeCredentials.token(for: "secret")
+        guard case .token(let token, let salt) = saved else { throw NavidromeError(code: -1, message: "no token") }
+        #expect(token == NavidromeCredentials.md5("secret" + salt))
+        let client = NavidromeClient(server: self.client.server, credentials: saved)
+        let items = try #require(URLComponents(url: client.url("ping"), resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(items.contains(URLQueryItem(name: "t", value: token)) && items.contains(URLQueryItem(name: "s", value: salt)))
+        // Credentials survive being written down.
+        let data = try JSONEncoder().encode(saved)
+        #expect(try JSONDecoder().decode(NavidromeCredentials.self, from: data) == saved)
+    }
+
     @Test func serverErrorsBecomeNavidromeErrors() throws {
         #expect(throws: NavidromeError(code: 40, message: "Wrong username or password")) {
             _ = try NavidromeClient.body(of: try fixture("wrongPassword"))
@@ -122,6 +134,35 @@ private func fixture(_ name: String) throws -> Data {
         let search = try await client.search("Beta")
         #expect(search.artist?.first?.name == "Beta Waves")
         #expect(try await client.albumList(.newest).count == 4)
+    }
+
+    @Test func favouritesRoundTrip() async throws {
+        let album = try #require(try await client.albumList(.alphabeticalByName).last)
+        let song = try #require(try await client.album(album.id).song?.first)
+        try await client.setStarred(true, .album(album.id))
+        try await client.setStarred(true, .song(song.id))
+        let starred = try await client.starred()
+        try await client.setStarred(false, .album(album.id))
+        try await client.setStarred(false, .song(song.id))
+        #expect(starred.album?.contains { $0.id == album.id } == true)
+        #expect(starred.song?.contains { $0.id == song.id } == true)
+        let after = try await client.starred()
+        #expect(after.album?.contains { $0.id == album.id } != true)
+        #expect(after.song?.contains { $0.id == song.id } != true)
+    }
+
+    @Test func radioStationsRoundTrip() async throws {
+        let name = "Test Radio \(UUID().uuidString.prefix(6))"
+        try await client.createRadioStation(name: name, streamURL: URL(string: "http://127.0.0.1:9/stream.mp3")!)
+        let station = try #require(try await client.radioStations().first { $0.name == name })
+        #expect(station.streamUrl == "http://127.0.0.1:9/stream.mp3")
+        try await client.deleteRadioStation(id: station.id)
+        #expect(try await client.radioStations().contains { $0.name == name } == false)
+    }
+
+    @Test func aSavedTokenWorksAgainstTheServer() async throws {
+        let client = NavidromeClient(server: NavidromeLive.server, credentials: .token(for: "admin"))
+        try await client.ping()
     }
 
     @Test func wrongPasswordIsReported() async {

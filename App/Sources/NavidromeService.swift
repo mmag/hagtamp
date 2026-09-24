@@ -71,28 +71,38 @@ final class NavidromeService: RemoteTrackResolver {
             limit: Int64(limit > 0 ? limit : 2000) * 1_000_000)
         try? FileManager.default.createDirectory(at: coverFolder, withIntermediateDirectories: true)
         if let url = defaults.url(forKey: Keys.url), let username = defaults.string(forKey: Keys.username) {
-            connect(NavidromeServer(url: url, username: username), password: Keychain.password(for: "\(username)@\(url.absoluteString)"))
+            let server = NavidromeServer(url: url, username: username)
+            connect(server, credentials: CredentialsStore.credentials(for: Self.account(server)) ?? Self.moveFromKeychain(server))
         }
     }
 
     var isConfigured: Bool { client != nil }
-    var password: String? { server.flatMap { Keychain.password(for: Self.account($0)) } }
 
-    /// Saves the settings and reconnects.
+    /// Saved credentials for this server and user, if they are the configured ones.
+    func savedCredentials(url: URL, username: String) -> NavidromeCredentials? {
+        guard server == NavidromeServer(url: url, username: username) else { return nil }
+        return CredentialsStore.credentials(for: Self.account(NavidromeServer(url: url, username: username)))
+    }
+
+    /// Saves the settings and reconnects; a password is kept as a token only.
     func configure(url: URL, username: String, password: String) {
+        configure(url: url, username: username, credentials: .token(for: password))
+    }
+
+    func configure(url: URL, username: String, credentials: NavidromeCredentials) {
         let server = NavidromeServer(url: url, username: username)
         Storage.defaults.set(url, forKey: Keys.url)
         Storage.defaults.set(username, forKey: Keys.username)
-        Keychain.setPassword(password, for: Self.account(server))
-        connect(server, password: password)
+        CredentialsStore.set(credentials, for: Self.account(server))
+        connect(server, credentials: credentials)
         onChange?()
     }
 
-    private func connect(_ server: NavidromeServer, password: String?) {
+    private func connect(_ server: NavidromeServer, credentials: NavidromeCredentials?) {
         self.server = server
-        client = password.map {
+        client = credentials.map {
             NavidromeClient(
-                server: server, password: $0,
+                server: server, credentials: $0,
                 responseCache: Storage.supportDirectory.appendingPathComponent("Cache/Responses", isDirectory: true))
         }
     }
@@ -101,9 +111,23 @@ final class NavidromeService: RemoteTrackResolver {
         "\(server.username)@\(server.url.absoluteString)"
     }
 
+    /// Earlier versions kept the password in the Keychain: it becomes a
+    /// saved token (one last Keychain prompt) and leaves the Keychain.
+    private static func moveFromKeychain(_ server: NavidromeServer) -> NavidromeCredentials? {
+        guard !Storage.isSelfTest, let password = Keychain.password(for: account(server)) else { return nil }
+        let credentials = NavidromeCredentials.token(for: password)
+        CredentialsStore.set(credentials, for: account(server))
+        Keychain.deletePassword(for: account(server))
+        return credentials
+    }
+
     /// Checks credentials without saving them.
+    static func test(url: URL, username: String, credentials: NavidromeCredentials) async throws {
+        try await NavidromeClient(server: NavidromeServer(url: url, username: username), credentials: credentials).ping()
+    }
+
     static func test(url: URL, username: String, password: String) async throws {
-        try await NavidromeClient(server: NavidromeServer(url: url, username: username), password: password).ping()
+        try await test(url: url, username: username, credentials: .password(password))
     }
 
     // MARK: - Playing songs (RemoteTrackResolver)

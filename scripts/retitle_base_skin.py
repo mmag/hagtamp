@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Builds Hagtamp's default skin from the Winamp 2.91 base skin: the
 "WINAMP" lettering in the title bars becomes "HAGTAMP" ("PLAYLIST" alone in
-the playlist, where the longer name doesn't fit).
+the playlist, where the longer name doesn't fit), and the logo on the main
+window's about button becomes Hagtamp's (art/logo-skin.png, from
+scripts/make_logo.py).
 
 Letters are reused from the skin's own lettering (A, M, P from WINAMP; T and
 PLAYLIST from the playlist title; EQUALIZER from the equalizer title); H and
@@ -12,9 +14,12 @@ Usage: scripts/retitle_base_skin.py <sheets-dir> <original.wsz> <out.wsz>
 where <sheets-dir> comes from `skintool sheets <original.wsz> <sheets-dir>`.
 """
 import io
+import os
 import sys
 import zipfile
 from PIL import Image
+
+LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "art", "logo-skin.png")
 
 def lum(p):
     return (p[0] * 299 + p[1] * 587 + p[2] * 114) / 1000
@@ -159,11 +164,41 @@ def retitle_bar(im, oy, text_rows, old_text, left_cap_end, right_cap_start, mask
         im.paste(saved, (cap[0] + shift_r, rows[0]))
     paint(im, mask, new_x0, y0, color)
 
+def restore_background(im, x0, y0, x1, y1):
+    """Refills the inside of a box from its edges (a Coons patch), which
+    follows the background's gradient where a copied patch would show."""
+    q = im.load()
+    for y in range(y0 + 1, y1):
+        for x in range(x0 + 1, x1):
+            u = (x - x0) / (x1 - x0)
+            t = (y - y0) / (y1 - y0)
+            pixel = []
+            for k in range(3):
+                h = q[x0, y][k] * (1 - u) + q[x1, y][k] * u
+                v = q[x, y0][k] * (1 - t) + q[x, y1][k] * t
+                c = (q[x0, y0][k] * (1 - u) + q[x1, y0][k] * u) * (1 - t) + (q[x0, y1][k] * (1 - u) + q[x1, y1][k] * u) * t
+                pixel.append(int(round(h + v - c)))
+            q[x, y] = tuple(pixel)
+
+
+def relogo_main(main_bmp):
+    """The about button: the Winamp bolt (249-266, 89-106, around the 253,91
+    13x15 click area) goes, and Hagtamp's logo takes the corner: 3 px clear
+    of the frame on the right (x 269), 1 px above it (y 110). The free space
+    ends at the repeat button (x 237) and the seek bar (y 81)."""
+    restore_background(main_bmp, 248, 88, 268, 107)
+    logo = Image.open(LOGO).convert("RGBA")
+    canvas = main_bmp.convert("RGBA")
+    canvas.alpha_composite(logo, (266 - logo.width, 109 - logo.height))
+    return canvas.convert("RGB")
+
+
 def main():
     sheets, original, out = sys.argv[1:4]
     titlebar = Image.open(f"{sheets}/TITLEBAR.png").convert("RGB")
     eqmain = Image.open(f"{sheets}/EQMAIN.png").convert("RGB")
     pledit = Image.open(f"{sheets}/PLEDIT.png").convert("RGB")
+    main_bmp = relogo_main(Image.open(f"{sheets}/MAIN.png").convert("RGB"))
 
     # Letters from the skin (active title bars, before editing).
     A = read_mask(titlebar, 163, 169, 5, 11)
@@ -218,7 +253,7 @@ def main():
         paint(pledit, PLAYLIST, new_x0, y0, color)
 
     # Rebuild the archive with the edited bitmaps.
-    edited = {"TITLEBAR.BMP": titlebar, "EQMAIN.BMP": eqmain, "PLEDIT.BMP": pledit}
+    edited = {"TITLEBAR.BMP": titlebar, "EQMAIN.BMP": eqmain, "PLEDIT.BMP": pledit, "MAIN.BMP": main_bmp}
     with zipfile.ZipFile(original) as src, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
         for info in src.infolist():
             name = info.filename.split("/")[-1].upper()

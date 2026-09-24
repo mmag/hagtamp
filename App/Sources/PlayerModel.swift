@@ -3,15 +3,22 @@ import ClassicUI
 import Foundation
 import PlayerCore
 
-/// Turns playlist URLs that aren't local files (Navidrome songs) into something playable.
+/// Turns playlist URLs that aren't local files (Navidrome songs, internet
+/// radio) into something playable.
 @MainActor
 protocol RemoteTrackResolver: AnyObject {
     func handles(_ url: URL) -> Bool
+    /// Endless streams (radio) aren't queued ahead: they'd never hand over.
+    func isLive(_ url: URL) -> Bool
     /// A file already on disk, without waiting.
     func cachedFile(for url: URL) -> URL?
     /// The cached file, or a download that can start playing, once enough of
     /// it is there (`progress` reports 0...1 of that).
     func prepare(_ url: URL, progress: @escaping @MainActor (Double) -> Void) async throws -> PlayableSource
+}
+
+extension RemoteTrackResolver {
+    func isLive(_ url: URL) -> Bool { false }
 }
 
 /// Player state as the UI sees it, on top of the audio engine.
@@ -27,14 +34,18 @@ final class PlayerModel {
     var onError: ((String) -> Void)?
 
     let engine = AudioEngine()
-    /// Provides local files for remote entries (Navidrome).
-    weak var resolver: RemoteTrackResolver?
+    /// Provide sources for entries that aren't local files, first match wins.
+    var resolvers: [RemoteTrackResolver] = []
     private(set) var playlist = Playlist()
     private(set) var status = PlaybackStatus.stopped
     /// Progress 0...1 while a remote track buffers before playing.
     private(set) var buffering: Double?
     /// Entry queued in the engine to follow the current track.
     private var queuedID: UUID?
+    /// A live stream to start when the current track ends (it can't be queued).
+    private var followingLiveID: UUID?
+    /// The song a radio station says it is playing.
+    private(set) var streamTitle: String?
     /// Cached files (complete or still downloading) standing in for remote entries.
     private var localFiles: [UUID: URL] = [:]
     private var loadTask: Task<Void, Never>?
@@ -62,6 +73,7 @@ final class PlayerModel {
     init() {
         restoreSettings()
         restorePlaylist()
+        restorePosition()
         engine.onEvent = { [weak self] event in self?.handle(event) }
         engine.volume = volume
         engine.balance = balance
@@ -77,6 +89,7 @@ final class PlayerModel {
     /// What the displays show: the track being heard, else the current entry.
     var displayedTrack: TrackInfo? {
         guard status != .stopped, let url = nowPlayingURL else { return currentTrack }
+        if let streamTitle { return TrackInfo(url: url, title: streamTitle) }
         if let current = currentTrack, current.url == url { return current }
         return playlist.entries.first { $0.url == url }?.info ?? TrackInfo(url: url)
     }
@@ -99,10 +112,11 @@ final class PlayerModel {
         load(tracks: Self.tracks(from: urls), play: play)
     }
 
-    func load(tracks: [TrackInfo], play: Bool) {
+    /// `tagsKnown`: the tracks come with complete tags (from a library), nothing to read.
+    func load(tracks: [TrackInfo], play: Bool, tagsKnown: Bool = false) {
         stop()
         playlist.removeAll()
-        playlist.insert(tracks)
+        playlist.insert(tracks, infoLoaded: tagsKnown)
         playlist.setCurrent(playlist.isEmpty ? nil : 0)
         readTags()
         playlistChanged()
@@ -115,8 +129,8 @@ final class PlayerModel {
     }
 
     /// Adds tracks (Winamp's "Enqueue") at `index` (the end when nil).
-    func add(tracks: [TrackInfo], at index: Int? = nil) {
-        let range = playlist.insert(tracks, at: index)
+    func add(tracks: [TrackInfo], at index: Int? = nil, tagsKnown: Bool = false) {
+        let range = playlist.insert(tracks, at: index, infoLoaded: tagsKnown)
         if currentIndex == nil, !range.isEmpty { playlist.setCurrent(range.lowerBound) }
         readTags()
         playlistChanged()
@@ -199,7 +213,10 @@ final class PlayerModel {
         buffering = nil
         engine.stop()
         queuedID = nil
+        followingLiveID = nil
+        streamTitle = nil
         status = .stopped
+        forgetPosition()
         changed()
     }
 
@@ -218,7 +235,7 @@ final class PlayerModel {
         loadTask?.cancel()
         playlist.setCurrent(index)
         let entry = playlist[index]
-        guard let resolver, resolver.handles(entry.url) else {
+        guard let resolver = resolver(for: entry.url) else {
             start(entry, .file(entry.url), attempts: attempts)
             return
         }
@@ -240,7 +257,10 @@ final class PlayerModel {
                     self.buffering = value
                     self.changed()
                 }
-                guard let self, !Task.isCancelled, self.buffering != nil, self.playlist.currentID == entry.id else { return }
+                guard let self, !Task.isCancelled, self.buffering != nil, self.playlist.currentID == entry.id else {
+                    source.discard()
+                    return
+                }
                 self.start(entry, source, attempts: attempts)
             } catch {
                 guard let self, !Task.isCancelled, self.playlist.currentID == entry.id else { return }
@@ -252,8 +272,16 @@ final class PlayerModel {
 
     private func start(_ entry: PlaylistEntry, _ source: PlayableSource, attempts: Int) {
         buffering = nil
+        streamTitle = nil
+        let resume = resumeAt?.url == entry.url ? resumeAt : nil
+        resumeAt = nil
         do {
-            try engine.play(source)
+            // Back where it was at the last quit, if the file can seek (a stream can't yet).
+            if let resume, case .file(let file) = source, let duration = entry.info.duration, duration > 0 {
+                try engine.play(file, from: resume.seconds / duration)
+            } else {
+                try engine.play(source)
+            }
             localFiles[entry.id] = source.url
             nowPlayingURL = entry.url
             status = .playing
@@ -262,8 +290,20 @@ final class PlayerModel {
             requeue(clearingQueue: false)
             changed()
         } catch {
+            source.discard()
             failed(entry, index: playlist.entries.firstIndex { $0.id == entry.id } ?? 0, attempts: attempts, error: error)
         }
+    }
+
+    private func resolver(for url: URL) -> RemoteTrackResolver? {
+        resolvers.first { $0.handles(url) }
+    }
+
+    /// A station's new song title, shown while it plays.
+    func streamTitleChanged(_ title: String, for url: URL) {
+        guard nowPlayingURL == url, status != .stopped else { return }
+        streamTitle = title
+        changed()
     }
 
     private func failed(_ entry: PlaylistEntry, index: Int, attempts: Int, error: Error) {
@@ -275,7 +315,7 @@ final class PlayerModel {
         guard status != .stopped, buffering == nil else { return }
         if !engine.seek(to: fraction) {
             // A stream can't seek; once its download is complete the cached file takes over.
-            guard let index = currentIndex, let resolver, resolver.handles(playlist[index].url),
+            guard let index = currentIndex, resolver(for: playlist[index].url) != nil,
                 let file = localFiles[playlist[index].id], FileManager.default.fileExists(atPath: file.path),
                 (try? engine.play(file, from: fraction)) != nil
             else { return }
@@ -310,16 +350,23 @@ final class PlayerModel {
         guard status != .stopped, buffering == nil else { return }
         if clearingQueue { engine.clearQueue() }
         prefetchTask?.cancel()
+        followingLiveID = nil
         guard let next = followingIndex() else {
             queuedID = nil
             return
         }
         let entry = playlist[next]
-        queuedID = entry.id
-        guard let resolver, resolver.handles(entry.url) else {
+        guard let resolver = resolver(for: entry.url) else {
+            queuedID = entry.id
             try? engine.enqueue(entry.url)
             return
         }
+        if resolver.isLive(entry.url) {
+            queuedID = nil
+            followingLiveID = entry.id
+            return
+        }
+        queuedID = entry.id
         if let cached = resolver.cachedFile(for: entry.url) {
             localFiles[entry.id] = cached
             try? engine.enqueue(cached)
@@ -327,7 +374,10 @@ final class PlayerModel {
         }
         prefetchTask = Task { [weak self] in
             guard let source = try? await resolver.prepare(entry.url, progress: { _ in }) else { return }
-            guard let self, !Task.isCancelled, self.queuedID == entry.id else { return }
+            guard let self, !Task.isCancelled, self.queuedID == entry.id else {
+                source.discard()
+                return
+            }
             self.localFiles[entry.id] = source.url
             try? self.engine.enqueue(source)
         }
@@ -345,6 +395,57 @@ final class PlayerModel {
         return playlist.entries.firstIndex { (localFiles[$0.id] ?? $0.url) == file }
     }
 
+    // MARK: - Position between launches
+
+    private struct SavedPosition: Codable {
+        var url: URL
+        var seconds: Double
+    }
+
+    private static let resumeKey = "player.resumePosition"
+    private static let positionKey = "player.position"
+
+    /// Continue the current track from where it was at the last quit (Preferences).
+    var resumesPosition = Storage.defaults.bool(forKey: PlayerModel.resumeKey) {
+        didSet {
+            Storage.defaults.set(resumesPosition, forKey: Self.resumeKey)
+            if !resumesPosition { forgetPosition() }
+        }
+    }
+    /// Where the current entry starts the next time it plays.
+    private var resumeAt: SavedPosition?
+    private var positionSavedAt = Date.distantPast
+
+    /// Keeps the position of what is playing or paused: every few seconds
+    /// (`force` on quit). Stopping forgets it.
+    func savePosition(force: Bool = false) {
+        guard resumesPosition, force || Date().timeIntervalSince(positionSavedAt) >= 5 else { return }
+        positionSavedAt = Date()
+        guard status != .stopped, buffering == nil, let url = nowPlayingURL else { return }
+        Storage.defaults.set(try? JSONEncoder().encode(SavedPosition(url: url, seconds: elapsed)), forKey: Self.positionKey)
+    }
+
+    private func restorePosition() {
+        guard resumesPosition, let data = Storage.defaults.data(forKey: Self.positionKey),
+            let saved = try? JSONDecoder().decode(SavedPosition.self, from: data),
+            let index = currentIndex, playlist[index].url == saved.url
+        else { return }
+        resumeAt = saved
+    }
+
+    private func forgetPosition() {
+        resumeAt = nil
+        Storage.defaults.removeObject(forKey: Self.positionKey)
+    }
+
+    /// Self test: what a relaunch does with the saved position.
+    func relaunchForTesting() {
+        engine.stop()
+        status = .stopped
+        restorePosition()
+        changed()
+    }
+
     // MARK: - Engine events
 
     /// Debug hook (self test).
@@ -357,6 +458,7 @@ final class PlayerModel {
             if let index = entryIndex(playing: file) {
                 let changedTrack = index != currentIndex || playlist[index].id == queuedID
                 playlist.setCurrent(index)
+                if nowPlayingURL != playlist[index].url { streamTitle = nil }
                 nowPlayingURL = playlist[index].url
                 if changedTrack { requeue() }
             } else {
@@ -372,9 +474,12 @@ final class PlayerModel {
             case .stopped: status = .stopped
             }
         case .endOfAudio:
-            if buffering == nil {
+            if let id = followingLiveID, let index = playlist.entries.firstIndex(where: { $0.id == id }) {
+                play(trackAt: index)  // the station starts when the track before it ends
+            } else if buffering == nil {
                 status = .stopped
                 queuedID = nil
+                streamTitle = nil
             }
         case .error(let message):
             onError?(message)

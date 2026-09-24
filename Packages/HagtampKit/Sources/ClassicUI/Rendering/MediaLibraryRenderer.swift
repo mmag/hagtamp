@@ -1,33 +1,25 @@
 import SkinKit
 
 public enum MediaLibraryButton: CaseIterable, Sendable {
-    case play, enqueue, clearSearch, preferences
-
-    var title: String {
-        switch self {
-        case .play: "Play"
-        case .enqueue: "Enqueue"
-        case .clearSearch: "Clear"
-        case .preferences: "Preferences…"
-        }
-    }
+    /// `setup` gets the library's own title ("Preferences…", "Add Folder…").
+    case play, enqueue, clearSearch, setup
 }
 
-/// Everything the media library window shows.
+/// Everything a library window shows.
 public struct MediaLibraryState: Sendable {
     public var frame: GenWindowState
-    /// Views (Library, Recently Added, Playlists).
+    /// Views (Library, Recently Added, …).
     public var sidebar: ListViewModel
     public var search = ""
     public var searchFocused = false
     public var caretVisible = true
-    /// One list, or two side by side (artists | albums).
+    /// None, one list, or two side by side (artists | albums).
     public var upper: [ListViewModel]
     public var tracks: ListViewModel
     public var status = ""
     public var pressedButton: MediaLibraryButton?
-    /// Shown instead of the playback buttons' neighbour when the server isn't set up.
-    public var showsPreferencesButton = false
+    /// Title of a button next to Play/Enqueue for setting the library up (nil: none).
+    public var setupButton: String?
 
     public init(frame: GenWindowState, sidebar: ListViewModel, upper: [ListViewModel], tracks: ListViewModel) {
         self.frame = frame
@@ -48,7 +40,7 @@ public struct MediaLibraryLayout: Sendable {
     public let buttons: [MediaLibraryButton: PixelRect]
     public let status: PixelRect
 
-    public init(width: Int, height: Int, upperCount: Int, showsPreferencesButton: Bool) {
+    public init(width: Int, height: Int, upperCount: Int, showsSetupButton: Bool) {
         let c = GenWindowRenderer.contentRect(width: width, height: height)
         content = c
         let listsBottom = c.maxY - 20
@@ -58,8 +50,10 @@ public struct MediaLibraryLayout: Sendable {
         searchLabel = PixelRect(x: x0, y: c.y, width: 38, height: 15)
         searchField = PixelRect(x: x0 + 40, y: c.y, width: clear.x - 3 - (x0 + 40), height: 15)
         let upperTop = c.y + 18
-        let upperHeight = (listsBottom - upperTop - 3) * 45 / 100
-        if upperCount >= 2 {
+        let upperHeight = upperCount == 0 ? -3 : (listsBottom - upperTop - 3) * 45 / 100
+        if upperCount == 0 {
+            upper = []
+        } else if upperCount >= 2 {
             let w = (rightWidth - 3) / 2
             upper = [
                 PixelRect(x: x0, y: upperTop, width: w, height: upperHeight),
@@ -76,8 +70,8 @@ public struct MediaLibraryLayout: Sendable {
             .enqueue: PixelRect(x: c.x + 47, y: buttonY, width: 58, height: 15),
         ]
         var statusX = c.x + 110
-        if showsPreferencesButton {
-            buttons[.preferences] = PixelRect(x: c.x + 108, y: buttonY, width: 76, height: 15)
+        if showsSetupButton {
+            buttons[.setup] = PixelRect(x: c.x + 108, y: buttonY, width: 76, height: 15)
             statusX = c.x + 190
         }
         self.buttons = buttons
@@ -93,7 +87,7 @@ public enum MediaLibraryRenderer {
         var canvas = GenWindowRenderer.render(skin, frame)
         let layout = MediaLibraryLayout(
             width: frame.pixelWidth, height: frame.pixelHeight, upperCount: state.upper.count,
-            showsPreferencesButton: state.showsPreferencesButton)
+            showsSetupButton: state.setupButton != nil)
         let font = skin.playlistStyle.font
 
         GenControls.drawList(&canvas, skin, colors, layout.sidebar, state.sidebar)
@@ -106,7 +100,14 @@ public enum MediaLibraryRenderer {
         }
         GenControls.drawList(&canvas, skin, colors, layout.tracks, state.tracks)
         for (button, rect) in layout.buttons {
-            GenControls.drawButton(&canvas, skin, colors, rect, title: button.title, pressed: state.pressedButton == button)
+            let title =
+                switch button {
+                case .play: "Play"
+                case .enqueue: "Enqueue"
+                case .clearSearch: "Clear"
+                case .setup: state.setupButton ?? ""
+                }
+            GenControls.drawButton(&canvas, skin, colors, rect, title: title, pressed: state.pressedButton == button)
         }
         SystemText.draw(&canvas, state.status, in: layout.status, color: colors.windowText, fontName: font)
         return canvas

@@ -21,6 +21,7 @@ targets:
     platform: macOS
     sources:
       - App/Sources
+      - App/Assets.xcassets
     dependencies:
       - package: HagtampKit
         product: SkinKit
@@ -32,6 +33,8 @@ targets:
         product: AudioCore
       - package: HagtampKit
         product: NavidromeKit
+      - package: HagtampKit
+        product: LibraryKit
     info:
       path: App/Info.plist
       properties:
@@ -54,6 +57,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.hagtamp.Hagtamp
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Manual
         ENABLE_HARDENED_RUNTIME: NO

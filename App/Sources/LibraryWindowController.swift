@@ -1,42 +1,30 @@
 import AppKit
 import ClassicUI
-import NavidromeKit
 import PlayerCore
 import SkinKit
 
-/// The media library: Navidrome browsing in a skinned generic window,
-/// modelled on Winamp 5's "Audio" view (artist and album filters above the
-/// track list).
+/// A library in a skinned generic window, modelled on Winamp 5's media
+/// library "Audio" view: views in a sidebar, artist and album lists above
+/// the track list, search. Navidrome and the local files each get one.
 @MainActor
-final class MediaLibraryWindowController: SkinWindowController {
-    enum View: Int, CaseIterable {
-        case library, recent, playlists
-
-        var title: String {
-            switch self {
-            case .library: "Library"
-            case .recent: "Recently Added"
-            case .playlists: "Playlists"
-            }
-        }
-    }
-
+final class LibraryWindowController: SkinWindowController {
     /// Keyboard focus inside the window.
     enum Focus: Equatable {
         case sidebar, search, upper(Int), tracks
     }
 
+    let source: LibrarySource
     private var widthSteps = 11
     private var heightSteps = 10
-    private var view = View.library
+    private var viewIndex = 0
     private var focus = Focus.tracks
     private var search = ""
-    private var searchResults: NavidromeSearchResult?
+    private var searchResults: LibraryContent?
 
-    private var artists: [NavidromeArtist] = []
-    private var albums: [NavidromeAlbum] = []
-    private var playlists: [NavidromePlaylist] = []
-    private var songs: [NavidromeSong] = []
+    private var artists: [LibraryArtist] = []
+    private var albums: [LibraryAlbum] = []
+    private var playlists: [LibraryPlaylist] = []
+    private var tracks: [LibraryTrack] = []
     /// Per list: selection and scroll (0-1 = upper lists, 2 = tracks).
     private var selection: [Int: Set<Int>] = [:]
     private var scroll: [Int: Int] = [:]
@@ -44,7 +32,7 @@ final class MediaLibraryWindowController: SkinWindowController {
     private var loading: [Int: String] = [:]
     private var status = ""
     private var pressedButton: MediaLibraryButton?
-    private var loadedServer: String?
+    private var loadedRevision: String?
     /// Play the tracks as soon as they arrive (double-click on an artist/album/playlist).
     private var playWhenLoaded = false
     private var thumbDrag: (list: Int, offset: Int)?
@@ -52,16 +40,27 @@ final class MediaLibraryWindowController: SkinWindowController {
 
     private static let tracksList = 2
 
-    init(manager: WindowManager) {
-        super.init(id: .mediaLibrary, manager: manager)
+    init(id: WindowID, source: LibrarySource, manager: WindowManager) {
+        self.source = source
+        super.init(id: id, manager: manager)
+        source.onChange = { [weak self] in
+            guard let self, self.window.isVisible else { return }
+            self.changed()
+        }
     }
 
-    private var navidrome: NavidromeService { manager.navidrome }
+    private var view: LibraryView { source.views[viewIndex] }
     private var width: Int { GenWindowRenderer.baseWidth + widthSteps * 25 }
     private var height: Int { GenWindowRenderer.baseHeight + heightSteps * 29 }
-    private var upperCount: Int { view == .library ? 2 : 1 }
+    private var upperCount: Int {
+        switch view.lists {
+        case .artistsAndAlbums: 2
+        case .stations: 0
+        case .albums, .playlists: 1
+        }
+    }
     private var layout: MediaLibraryLayout {
-        MediaLibraryLayout(width: width, height: height, upperCount: upperCount, showsPreferencesButton: !navidrome.isConfigured)
+        MediaLibraryLayout(width: width, height: height, upperCount: upperCount, showsSetupButton: source.revision == nil)
     }
 
     override func regions() -> [ControlRegion] {
@@ -72,24 +71,32 @@ final class MediaLibraryWindowController: SkinWindowController {
     override func pixelSize() -> (width: Int, height: Int) { (width, height) }
     override func titleBarDoubleClicked() {}
 
+    override func savedState() -> [String: Int] { ["width": widthSteps, "height": heightSteps, "view": viewIndex] }
+
+    override func restore(_ state: [String: Int]) {
+        widthSteps = max(7, state["width"] ?? widthSteps)
+        heightSteps = max(6, state["height"] ?? heightSteps)
+        viewIndex = min(max(0, state["view"] ?? 0), source.views.count - 1)
+    }
+
     // MARK: - State
 
     override func renderBitmap() -> Bitmap {
-        reloadIfServerChanged()
+        reloadIfLibraryChanged()
         return MediaLibraryRenderer.render(manager.skin, state())
     }
 
     private func state() -> MediaLibraryState {
-        var frame = GenWindowState(title: "Media Library")
+        var frame = GenWindowState(title: source.windowTitle)
         frame.focused = isFocused
         frame.pressed = pressed
         frame.widthSteps = widthSteps
         frame.heightSteps = heightSteps
 
-        var sidebar = ListViewModel(columns: [ListColumn("")], rows: View.allCases.map { [$0.title] })
+        var sidebar = ListViewModel(columns: [ListColumn("")], rows: source.views.map { [$0.title] })
         sidebar.showsHeader = false
         sidebar.showsScrollbar = false
-        sidebar.selection = [view.rawValue]
+        sidebar.selection = [viewIndex]
         sidebar.focused = focus == .sidebar && isFocused
 
         var state = MediaLibraryState(frame: frame, sidebar: sidebar, upper: upperModels(), tracks: model(for: Self.tracksList))
@@ -98,7 +105,7 @@ final class MediaLibraryWindowController: SkinWindowController {
         state.caretVisible = Int(Date().timeIntervalSince1970 * 2) % 2 == 0
         state.status = statusText
         state.pressedButton = pressedButton
-        state.showsPreferencesButton = !navidrome.isConfigured
+        state.setupButton = source.revision == nil ? source.setupTitle : nil
         return state
     }
 
@@ -106,12 +113,25 @@ final class MediaLibraryWindowController: SkinWindowController {
         (0..<upperCount).map { model(for: $0) }
     }
 
+    private enum ListKind { case artists, albums, playlists, tracks, stations }
+
+    private func kind(of list: Int) -> ListKind {
+        switch (view.lists, list) {
+        case (.stations, Self.tracksList): .stations
+        case (_, Self.tracksList): .tracks
+        case (.artistsAndAlbums, 0): .artists
+        case (.playlists, 0): .playlists
+        default: .albums
+        }
+    }
+
     private func columns(for list: Int) -> [ListColumn] {
-        switch (view, list) {
-        case (.library, 0): [ListColumn("Artist"), ListColumn("Albums", width: 40, alignRight: true)]
-        case (.library, 1), (.recent, 0): [ListColumn("Album"), ListColumn("Artist"), ListColumn("Year", width: 34, alignRight: true)]
-        case (.playlists, 0): [ListColumn("Playlist"), ListColumn("Tracks", width: 40, alignRight: true), ListColumn("Length", width: 44, alignRight: true)]
-        default:
+        switch kind(of: list) {
+        case .artists: [ListColumn("Artist"), ListColumn("Albums", width: 40, alignRight: true)]
+        case .albums: [ListColumn("Album"), ListColumn("Artist"), ListColumn("Year", width: 34, alignRight: true)]
+        case .playlists: [ListColumn("Playlist"), ListColumn("Tracks", width: 40, alignRight: true), ListColumn("Length", width: 44, alignRight: true)]
+        case .stations: [ListColumn("Station"), ListColumn("Stream")]
+        case .tracks:
             [
                 ListColumn("#", width: 22, alignRight: true), ListColumn("Title"), ListColumn("Artist"), ListColumn("Album"),
                 ListColumn("Length", width: 40, alignRight: true),
@@ -121,11 +141,18 @@ final class MediaLibraryWindowController: SkinWindowController {
 
     private func rows(for list: Int) -> [[String]] {
         func time(_ seconds: Int?) -> String { seconds.map { Marquee.timeString($0) } ?? "" }
-        switch (view, list) {
-        case (.library, 0): return artists.map { [$0.name, $0.albumCount.map(String.init) ?? ""] }
-        case (.library, 1), (.recent, 0): return albums.map { [$0.name, $0.artist ?? "", $0.year.map(String.init) ?? ""] }
-        case (.playlists, 0): return playlists.map { [$0.name, $0.songCount.map(String.init) ?? "", time($0.duration)] }
-        default: return songs.map { [$0.track.map(String.init) ?? "", $0.title, $0.artist ?? "", $0.album ?? "", time($0.duration)] }
+        switch kind(of: list) {
+        case .artists: return artists.map { [$0.name, $0.albumCount.map(String.init) ?? ""] }
+        case .albums: return albums.map { [$0.name, $0.artist ?? "", $0.year.map(String.init) ?? ""] }
+        case .playlists: return playlists.map { [$0.name, $0.trackCount.map(String.init) ?? "", time($0.duration)] }
+        case .stations: return tracks.map { [$0.info.title ?? "", $0.info.url.absoluteString] }
+        case .tracks:
+            return tracks.map {
+                [
+                    $0.number.map(String.init) ?? "", $0.info.title ?? $0.info.displayName, $0.info.artist ?? "", $0.info.album ?? "",
+                    time($0.info.duration.map { Int($0.rounded()) }),
+                ]
+            }
         }
     }
 
@@ -139,10 +166,12 @@ final class MediaLibraryWindowController: SkinWindowController {
     }
 
     private var statusText: String {
-        if !navidrome.isConfigured { return "Navidrome is not set up." }
+        if source.revision == nil { return source.unavailableText }
+        if let activity = source.activity { return activity }
         if !status.isEmpty { return status }
-        let seconds = songs.compactMap(\.duration).reduce(0, +)
-        return songs.isEmpty ? "" : "\(songs.count) tracks, \(Marquee.timeString(seconds))"
+        if view.lists == .stations { return tracks.isEmpty ? "" : "\(tracks.count) \(tracks.count == 1 ? "station" : "stations")" }
+        let seconds = tracks.compactMap(\.info.duration).reduce(0, +)
+        return tracks.isEmpty ? "" : "\(tracks.count) \(tracks.count == 1 ? "track" : "tracks"), \(Marquee.timeString(Int(seconds.rounded())))"
     }
 
     private func listRect(_ list: Int) -> PixelRect {
@@ -159,30 +188,37 @@ final class MediaLibraryWindowController: SkinWindowController {
 
     // MARK: - Loading
 
-    private func reloadIfServerChanged() {
-        let key = navidrome.isConfigured ? navidrome.server?.key : nil
-        guard key != loadedServer else { return }
-        loadedServer = key
+    /// Another server, a rescanned folder: start over in the current view.
+    private func reloadIfLibraryChanged() {
+        let revision = source.revision
+        guard revision != loadedRevision else { return }
+        loadedRevision = revision
+        searchResults = nil
+        search = ""
+        if revision != nil {
+            loadView()
+        } else {
+            clearLists()
+        }
+    }
+
+    private func clearLists() {
         artists = []
         albums = []
         playlists = []
-        songs = []
+        tracks = []
         selection = [:]
         scroll = [:]
-        if key != nil { loadView() }
     }
 
     /// Runs `work` and applies its result unless the view changed meanwhile.
-    private func load<T: Sendable>(
-        into list: Int, _ work: @escaping @Sendable (NavidromeClient) async throws -> T, apply: @escaping (T) -> Void
-    ) {
-        guard let client = navidrome.client else { return }
+    private func load<T>(into list: Int, _ work: @escaping @MainActor () async throws -> T, apply: @escaping (T) -> Void) {
         let generation = loadGeneration
         loading[list] = "Loading…"
         changed()
         Task {
             do {
-                let result = try await work(client)
+                let result = try await work()
                 guard generation == loadGeneration else { return }
                 loading[list] = nil
                 status = ""
@@ -198,95 +234,79 @@ final class MediaLibraryWindowController: SkinWindowController {
 
     private func loadView() {
         loadGeneration += 1
-        artists = []
-        albums = []
-        playlists = []
-        songs = []
-        selection = [:]
-        scroll = [:]
+        clearLists()
         status = ""
-        switch view {
-        case .library:
-            if let results = searchResults {
-                artists = results.artist ?? []
-                albums = results.album ?? []
-                // Found songs come by relevance; list them album by album.
-                songs = (results.song ?? []).sorted {
-                    ($0.album ?? "", $0.discNumber ?? 0, $0.track ?? 0) < ($1.album ?? "", $1.discNumber ?? 0, $1.track ?? 0)
-                }
-            } else {
-                load(into: 0, { try await $0.artists() }) { [weak self] in self?.artists = $0 }
-            }
-        case .recent:
-            load(into: 0, { try await $0.albumList(.newest, size: 200) }) { [weak self] in self?.albums = $0 }
-        case .playlists:
-            load(into: 0, { try await $0.playlists() }) { [weak self] in self?.playlists = $0 }
+        loading = [:]
+        if viewIndex == 0, let results = searchResults {
+            show(results)
+        } else {
+            let source = self.source, index = viewIndex
+            load(into: upperCount == 0 ? Self.tracksList : 0, { try await source.content(ofView: index) }) { [weak self] in self?.show($0) }
         }
         changed()
+    }
+
+    private func show(_ content: LibraryContent) {
+        artists = content.artists
+        albums = content.albums
+        playlists = content.playlists
+        showTracks(content.tracks)
     }
 
     /// A row of an upper list was selected: load what it contains.
     private func selected(row: Int, in list: Int) {
         loadGeneration += 1
-        let tracks = Self.tracksList
-        songs = []
-        selection[tracks] = []
-        scroll[tracks] = 0
-        switch (view, list) {
-        case (.library, 0):
+        let source = self.source
+        tracks = []
+        selection[Self.tracksList] = []
+        scroll[Self.tracksList] = 0
+        switch kind(of: list) {
+        case .artists:
             guard artists.indices.contains(row) else { return }
-            let id = artists[row].id
+            let artist = artists[row]
             albums = []
             selection[1] = []
             scroll[1] = 0
-            load(into: 1, { try await $0.albums(ofArtist: id) }) { [weak self] albums in
+            load(into: 1, { try await source.albums(of: artist) }) { [weak self] albums in
                 self?.albums = albums
-                self?.loadSongs(of: albums)
+                self?.loadTracks(of: albums)
             }
-        case (.library, 1), (.recent, 0):
+        case .albums:
             guard albums.indices.contains(row) else { return }
-            loadSongs(of: [albums[row]])
-        case (.playlists, 0):
+            loadTracks(of: [albums[row]])
+        case .playlists:
             guard playlists.indices.contains(row) else { return }
-            let id = playlists[row].id
-            load(into: tracks, { try await $0.playlist(id).entry ?? [] }) { [weak self] songs in self?.showSongs(songs) }
-        default:
+            let playlist = playlists[row]
+            load(into: Self.tracksList, { try await source.tracks(of: playlist) }) { [weak self] in self?.showTracks($0) }
+        case .tracks, .stations:
             break
         }
     }
 
-    private func loadSongs(of albums: [NavidromeAlbum]) {
-        let ids = albums.map(\.id)
-        load(into: Self.tracksList, { client in
-            try await withThrowingTaskGroup(of: (Int, [NavidromeSong]).self) { group in
-                for (i, id) in ids.enumerated() {
-                    group.addTask { (i, try await client.album(id).song ?? []) }
-                }
-                var parts: [(Int, [NavidromeSong])] = []
-                for try await part in group { parts.append(part) }
-                return parts.sorted { $0.0 < $1.0 }.flatMap(\.1)
-            }
-        }) { [weak self] songs in self?.showSongs(songs) }
+    private func loadTracks(of albums: [LibraryAlbum]) {
+        let source = self.source
+        load(into: Self.tracksList, { try await source.tracks(of: albums) }) { [weak self] in self?.showTracks($0) }
     }
 
-    private func showSongs(_ songs: [NavidromeSong]) {
-        self.songs = songs
+    private func showTracks(_ tracks: [LibraryTrack]) {
+        self.tracks = tracks
         if playWhenLoaded {
             playWhenLoaded = false
-            play(songs, startingAt: 0)
+            play(tracks, startingAt: 0)
         }
     }
 
     private func runSearch() {
         let query = search.trimmingCharacters(in: .whitespaces)
-        view = .library
+        viewIndex = 0
         guard !query.isEmpty else {
             searchResults = nil
             loadView()
             return
         }
         loadGeneration += 1
-        load(into: Self.tracksList, { try await $0.search(query) }) { [weak self] results in
+        let source = self.source
+        load(into: Self.tracksList, { try await source.search(query) }) { [weak self] results in
             self?.searchResults = results
             self?.loadView()
         }
@@ -294,34 +314,34 @@ final class MediaLibraryWindowController: SkinWindowController {
 
     // MARK: - Playing
 
-    private func play(_ songs: [NavidromeSong], startingAt index: Int) {
-        guard !songs.isEmpty else { return }
-        manager.model.load(tracks: songs.map(NavidromeTrack.info(for:)), play: false)
-        manager.model.play(trackAt: min(index, songs.count - 1))
+    private func play(_ tracks: [LibraryTrack], startingAt index: Int) {
+        guard !tracks.isEmpty else { return }
+        manager.model.load(tracks: tracks.map(\.info), play: false, tagsKnown: source.tracksHaveTags)
+        manager.model.play(trackAt: min(index, tracks.count - 1))
     }
 
     /// The selected tracks, or all of them when none are selected.
-    private var chosenSongs: [NavidromeSong] {
-        let chosen = (selection[Self.tracksList] ?? []).sorted().filter(songs.indices.contains).map { songs[$0] }
-        return chosen.isEmpty ? songs : chosen
+    private var chosenTracks: [LibraryTrack] {
+        let chosen = (selection[Self.tracksList] ?? []).sorted().filter(tracks.indices.contains).map { tracks[$0] }
+        return chosen.isEmpty ? tracks : chosen
     }
 
     private func perform(_ button: MediaLibraryButton) {
         switch button {
-        case .play: play(chosenSongs, startingAt: 0)
-        case .enqueue: manager.model.add(tracks: chosenSongs.map(NavidromeTrack.info(for:)))
+        case .play: play(chosenTracks, startingAt: 0)
+        case .enqueue: manager.model.add(tracks: chosenTracks.map(\.info), tagsKnown: source.tracksHaveTags)
         case .clearSearch:
             search = ""
             runSearch()
-        case .preferences:
-            (NSApp.delegate as? AppDelegate)?.showPreferences(nil)
+        case .setup:
+            source.setUp()
         }
     }
 
     // MARK: - Pointer
 
     override func buttonClicked(_ control: Control) {
-        if control == .close { manager.setVisible(.mediaLibrary, false) }
+        if control == .close { manager.hideLibrary(self) }
     }
 
     private var resizeStart: (mouse: NSPoint, width: Int, height: Int)?
@@ -346,12 +366,13 @@ final class MediaLibraryWindowController: SkinWindowController {
         if layout.sidebar.contains(x: point.x, y: point.y) {
             focus = .sidebar
             let row = (point.y - layout.sidebar.y) / GenControls.rowHeight
-            // Clicking the current view again also leaves search results.
-            if let chosen = View(rawValue: row), chosen != view || searchResults != nil {
-                view = chosen
+            // Choosing the current view again leaves search results, or reloads it.
+            if source.views.indices.contains(row), row != viewIndex || searchResults != nil || source.views[row].reloadsWhenChosenAgain {
+                viewIndex = row
                 searchResults = nil
                 search = ""
                 loadView()
+                manager.saveLayout()
             }
             changed()
             return false
@@ -400,9 +421,9 @@ final class MediaLibraryWindowController: SkinWindowController {
         selection[list] = chosen
         if event.clickCount == 2 {
             if list == Self.tracksList {
-                play(songs, startingAt: row)
+                play(tracks, startingAt: row)
             } else if wasSelected && loading[Self.tracksList] == nil && loading[1] == nil {
-                play(songs, startingAt: 0)
+                play(tracks, startingAt: 0)
             } else {
                 playWhenLoaded = true
             }
@@ -493,7 +514,7 @@ final class MediaLibraryWindowController: SkinWindowController {
         case 126: select(current - 1)
         case 125: select(current + 1)
         case 36, 76:
-            if list == Self.tracksList { play(songs, startingAt: max(0, current)) } else { play(songs, startingAt: 0) }
+            if list == Self.tracksList { play(tracks, startingAt: max(0, current)) } else { play(tracks, startingAt: 0) }
         case 48:  // tab
             focus = .search
             changed()
@@ -533,7 +554,7 @@ final class MediaLibraryWindowController: SkinWindowController {
 
     /// For the self test.
     var summary: String {
-        "view=\(view.title) artists=\(artists.count) albums=\(albums.count) playlists=\(playlists.count) songs=\(songs.count) status=\(statusText)"
+        "view=\(view.title) artists=\(artists.count) albums=\(albums.count) playlists=\(playlists.count) songs=\(tracks.count) status=\(statusText)"
     }
 
     func selectForTesting(row: Int, in list: Int) {
@@ -542,4 +563,16 @@ final class MediaLibraryWindowController: SkinWindowController {
     }
 
     func playAllForTesting() { perform(.play) }
+
+    func searchForTesting(_ query: String) {
+        search = query
+        runSearch()
+    }
+
+    func chooseViewForTesting(_ index: Int) {
+        guard index != viewIndex else { return }
+        viewIndex = index
+        searchResults = nil
+        loadView()
+    }
 }

@@ -8,11 +8,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let model = PlayerModel()
     private let navidrome = NavidromeService()
-    private lazy var windows = WindowManager(model: model, skin: .base, navidrome: navidrome)
-    private lazy var preferences = PreferencesWindowController(navidrome: navidrome)
+    private let radio = RadioResolver()
+    private let localLibrary = LocalLibraryService()
+    private lazy var windows = WindowManager(model: model, skin: .base, navidrome: navidrome, localLibrary: localLibrary)
+    private lazy var preferences = PreferencesWindowController(player: model, navidrome: navidrome, library: localLibrary)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        model.resolver = navidrome
+        model.resolvers = [navidrome, radio]
+        radio.onTitle = { [weak model] title, url in model?.streamTitleChanged(title, for: url) }
         NSApp.mainMenu = makeMainMenu()
         if let path = Storage.defaults.string(forKey: Self.lastSkinKey) {
             loadSkin(from: URL(fileURLWithPath: path), remember: false)
@@ -22,6 +25,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        windows.saveLayout()
+        model.savePosition(force: true)
+    }
 
     /// Finder "Open With": skins are applied, audio files are played.
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -86,7 +94,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(target: windows, "Playlist Editor", #selector(WindowManager.togglePlaylist), key: "e", modifiers: .option)
         viewMenu.addItem(target: windows, "Equalizer", #selector(WindowManager.toggleEqualizer), key: "g", modifiers: .option)
         viewMenu.addItem(target: windows, "Album Art", #selector(WindowManager.toggleAlbumArt), key: "a", modifiers: .option)
-        viewMenu.addItem(target: windows, "Media Library", #selector(WindowManager.toggleMediaLibrary), key: "l", modifiers: .option)
+        viewMenu.addItem(target: windows, "Local Library", #selector(WindowManager.toggleLocalLibrary), key: "m", modifiers: .option)
+        viewMenu.addItem(target: windows, "Navidrome", #selector(WindowManager.toggleNavidromeLibrary), key: "l", modifiers: .option)
         viewMenu.addItem(.separator())
         viewMenu.addItem(target: windows, "Double Size", #selector(WindowManager.toggleDoubleSize), key: "d", modifiers: .command)
         viewMenu.addItem(target: windows, "Always On Top", #selector(WindowManager.toggleAlwaysOnTop), key: "a", modifiers: .control)

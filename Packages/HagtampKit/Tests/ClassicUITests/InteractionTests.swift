@@ -101,3 +101,36 @@ import Testing
         #expect(Marquee.equalizerText(band: nil, value: 0.5) == "EQ: Preamp 0.0 DB")
     }
 }
+
+@Suite struct WindowRestoreTests {
+    let screen = WindowBox(.main, x: 0, y: 25, width: 1440, height: 875)
+    let main = WindowBox(.main, x: 100, y: 100, width: 275, height: 116)
+    var equalizer: WindowBox { WindowBox(.equalizer, x: 100, y: 216, width: 275, height: 116) }
+
+    @Test func windowsOnScreenStayPut() {
+        let result = WindowDocking.restore([main, equalizer], screens: [screen], home: (80, 105))
+        #expect(result.placed == [main, equalizer])
+        #expect(result.unreachable.isEmpty)
+    }
+
+    @Test func aGroupFromAMissingScreenComesHomeTogether() {
+        // Saved on a second screen to the right that is no longer attached.
+        let away = [main.offsetBy(dx: 2000, dy: 0), equalizer.offsetBy(dx: 2000, dy: 0)]
+        let result = WindowDocking.restore(away, screens: [screen], home: (80, 105))
+        #expect(result.placed.map(\.x) == [80, 80])
+        #expect(result.placed.map(\.y) == [105, 221])  // still docked
+    }
+
+    @Test func aStrayWindowIsReported() {
+        let stray = WindowBox(.albumArt, x: 3000, y: 100, width: 275, height: 290)
+        let result = WindowDocking.restore([main, stray], screens: [screen], home: (80, 105))
+        #expect(result.placed == [main])
+        #expect(result.unreachable == [.albumArt])
+    }
+
+    @Test func aTitleBarUnderTheMenuBarIsOutOfReach() {
+        #expect(!WindowDocking.isReachable(WindowBox(.main, x: 100, y: 0, width: 275, height: 116), screens: [screen]))
+        #expect(WindowDocking.isReachable(WindowBox(.main, x: 1420, y: 100, width: 275, height: 116), screens: [screen]) == false)
+        #expect(WindowDocking.isReachable(WindowBox(.main, x: 1400, y: 100, width: 275, height: 116), screens: [screen]))
+    }
+}

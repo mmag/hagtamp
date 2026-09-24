@@ -35,26 +35,44 @@ public final class StreamingTrack: @unchecked Sendable {
     }
 }
 
-/// What the player hands to the engine: a complete file or a stream.
+/// What the player hands to the engine: a complete file, a download in
+/// progress, or a live stream.
 public enum PlayableSource: Sendable {
     case file(URL)
     case stream(StreamingTrack)
+    case live(LiveStream)
 
     public var url: URL {
         switch self {
         case .file(let url): url
         case .stream(let track): track.url
+        case .live(let stream): stream.url
         }
     }
 
-    var stream: StreamingTrack? {
-        if case .stream(let track) = self { track } else { nil }
+    public var isLive: Bool {
+        if case .live = self { true } else { false }
     }
 
-    func decoder() throws -> AudioDecoder {
+    /// Lets go of a source that won't be played (a live stream's connection stays open until then).
+    public func discard() {
+        if case .live(let stream) = self { stream.close() }
+    }
+
+    /// What the engine cancels once the player is done with this source.
+    var release: (@Sendable () -> Void)? {
+        switch self {
+        case .file: nil
+        case .stream(let track): { track.cancel() }
+        case .live(let stream): { stream.close() }
+        }
+    }
+
+    func decoder() throws -> any PCMDecoding {
         switch self {
         case .file(let url): try AudioDecoder(url: url)
         case .stream(let track): track.decoder
+        case .live(let stream): stream.decoder
         }
     }
 }

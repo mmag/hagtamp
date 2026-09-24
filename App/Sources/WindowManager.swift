@@ -12,24 +12,32 @@ import UniformTypeIdentifiers
 final class WindowManager: NSObject {
     let model: PlayerModel
     let navidrome: NavidromeService
+    let localLibraryService: LocalLibraryService
     let cursors = CursorController()
     private(set) var skin: Skin
     var onSkinChange: ((Skin) -> Void)?
 
     private(set) var doubleSize = false
     private(set) var alwaysOnTop = false
-    var timeMode = TimeDisplayMode.elapsed
+    var timeMode = TimeDisplayMode.elapsed {
+        didSet { saveLayout() }
+    }
 
     private(set) lazy var main = MainWindowController(manager: self)
     private(set) lazy var equalizer = EqualizerWindowController(manager: self)
     private(set) lazy var playlist = PlaylistWindowController(manager: self)
     private(set) lazy var albumArt = AlbumArtWindowController(manager: self)
-    private(set) lazy var mediaLibrary = MediaLibraryWindowController(manager: self)
-    private var controllers: [SkinWindowController] { [main, equalizer, playlist, albumArt, mediaLibrary] }
+    private(set) lazy var navidromeLibrary = LibraryWindowController(id: .navidromeLibrary, source: navidrome, manager: self)
+    private(set) lazy var localLibrary = LibraryWindowController(id: .localLibrary, source: localLibraryService, manager: self)
+    private var controllers: [SkinWindowController] { [main, equalizer, playlist, albumArt, navidromeLibrary, localLibrary] }
+    /// Where extra windows kept their visibility before the saved layout
+    /// (read once, when there is no layout yet).
+    private static let visibilityKeys: [WindowID: String] = [
+        .albumArt: "albumArtVisible", .navidromeLibrary: "mediaLibraryVisible", .localLibrary: "localLibraryVisible",
+    ]
     private var visible: Set<WindowID> = {
         var ids: Set<WindowID> = [.main, .equalizer, .playlist]
-        if Storage.defaults.bool(forKey: "albumArtVisible") { ids.insert(.albumArt) }
-        if Storage.defaults.bool(forKey: "mediaLibraryVisible") { ids.insert(.mediaLibrary) }
+        for (id, key) in WindowManager.visibilityKeys where Storage.defaults.bool(forKey: key) { ids.insert(id) }
         return ids
     }()
 
@@ -49,10 +57,11 @@ final class WindowManager: NSObject {
     }
     private var move: (start: NSPoint, moving: [WindowBox], stationary: [WindowBox])?
 
-    init(model: PlayerModel, skin: Skin, navidrome: NavidromeService) {
+    init(model: PlayerModel, skin: Skin, navidrome: NavidromeService, localLibrary: LocalLibraryService) {
         self.model = model
         self.skin = skin
         self.navidrome = navidrome
+        self.localLibraryService = localLibrary
         super.init()
         cursors.load(skin)
         model.onChange = { [weak self] in self?.playerChanged() }
@@ -71,27 +80,19 @@ final class WindowManager: NSObject {
         case .equalizer: equalizer
         case .playlist: playlist
         case .albumArt: albumArt
-        case .mediaLibrary: mediaLibrary
+        case .navidromeLibrary: navidromeLibrary
+        case .localLibrary: localLibrary
         }
     }
 
     // MARK: - Lifecycle
 
-    /// Stacks the windows like Winamp's default layout (album art docked to
-    /// the right of the main window) and shows them.
+    /// Puts the windows back as they were at the last quit, or in Winamp's
+    /// default layout (stacked, extra windows docked to the right of the
+    /// main window), and shows them.
     func start() {
-        let visibleFrame = NSScreen.main?.visibleFrame ?? .zero
-        let top = Int(Self.primaryMaxY - visibleFrame.maxY) + 80
-        var y = top
-        let left = Int(visibleFrame.minX) + 80
-        for c in [main, equalizer, playlist] as [SkinWindowController] {
-            let (w, h) = c.pixelSize()
-            setFrame(c, WindowBox(c.id, x: left, y: y, width: w * scale, height: h * scale))
-            y += h * scale
-        }
-        for c in [albumArt, mediaLibrary] as [SkinWindowController] where visible.contains(c.id) {
-            placeBesideMain(c)
-        }
+        applySavedLayout()
+        started = true
         render()
         for c in controllers.reversed() where visible.contains(c.id) { c.window.orderFront(nil) }
         main.window.makeKeyAndOrderFront(nil)
@@ -225,6 +226,7 @@ final class WindowManager: NSObject {
     func isVisible(_ id: WindowID) -> Bool { visible.contains(id) }
 
     func setVisible(_ id: WindowID, _ show: Bool) {
+        defer { saveLayout() }
         let c = controller(id)
         if show {
             visible.insert(id)
@@ -243,34 +245,38 @@ final class WindowManager: NSObject {
     func toggleShade(_ id: WindowID) {
         controller(id).shade.toggle()
         render()
+        saveLayout()
     }
 
     @objc func toggleDoubleSize() {
         doubleSize.toggle()
         render()
+        saveLayout()
     }
 
     @objc func toggleAlwaysOnTop() {
         alwaysOnTop.toggle()
         for c in controllers { c.window.level = alwaysOnTop ? .floating : .normal }
         render()
+        saveLayout()
     }
 
     @objc func toggleEqualizer() { setVisible(.equalizer, !isVisible(.equalizer)) }
 
-    @objc func toggleAlbumArt() {
-        let show = !isVisible(.albumArt)
-        if show && albumArt.window.frame.width == 0 { placeBesideMain(albumArt) }
-        setVisible(.albumArt, show)
-        Storage.defaults.set(show, forKey: "albumArtVisible")
+    @objc func toggleAlbumArt() { toggleExtra(albumArt) }
+    @objc func toggleNavidromeLibrary() { toggleExtra(navidromeLibrary) }
+    @objc func toggleLocalLibrary() { toggleExtra(localLibrary) }
+
+    func hideLibrary(_ library: LibraryWindowController) {
+        if isVisible(library.id) { toggleExtra(library) }
     }
 
-    @objc func toggleMediaLibrary() {
-        let show = !isVisible(.mediaLibrary)
-        if show && mediaLibrary.window.frame.width == 0 { placeBesideMain(mediaLibrary) }
-        setVisible(.mediaLibrary, show)
-        Storage.defaults.set(show, forKey: "mediaLibraryVisible")
-        if show { mediaLibrary.window.makeKey() }
+    /// Shows or hides a window beyond the classic three, placing it on first showing.
+    private func toggleExtra(_ c: SkinWindowController) {
+        let show = !isVisible(c.id)
+        if show && c.window.frame.width == 0 { placeBesideMain(c) }
+        setVisible(c.id, show)
+        if show && c is LibraryWindowController { c.window.makeKey() }
     }
 
     /// First showing of an extra window: docked to the right of the main
@@ -322,11 +328,110 @@ final class WindowManager: NSObject {
 
     func endMove() {
         move = nil
+        saveLayout()
     }
 
     /// Resizes a window keeping its top-left corner, moving docked windows along.
     func windowSizeChanged() {
         render()
+        saveLayout()
+    }
+
+    // MARK: - Layout between launches
+
+    /// Windows and their modes as the user left them.
+    private struct Layout: Codable {
+        struct Window: Codable {
+            /// Top-left corner in global top-left coordinates; nil if never shown.
+            var x: Int?
+            var y: Int?
+            var visible: Bool
+            var shade: Bool
+            var state: [String: Int]
+        }
+
+        var windows: [String: Window]
+        var doubleSize: Bool
+        var alwaysOnTop: Bool
+        var timeRemaining: Bool
+    }
+
+    private static let layoutKey = "windowLayout"
+    /// Nothing is saved until the saved layout has been applied.
+    private var started = false
+
+    func saveLayout() {
+        guard started else { return }
+        var windows: [String: Layout.Window] = [:]
+        for c in controllers {
+            let placed = c.window.frame.width > 0
+            let b = box(c)
+            windows[c.id.rawValue] = Layout.Window(
+                x: placed ? b.x : nil, y: placed ? b.y : nil, visible: visible.contains(c.id), shade: c.shade,
+                state: c.savedState())
+        }
+        let layout = Layout(windows: windows, doubleSize: doubleSize, alwaysOnTop: alwaysOnTop, timeRemaining: timeMode == .remaining)
+        Storage.defaults.set(try? JSONEncoder().encode(layout), forKey: Self.layoutKey)
+    }
+
+    /// The saved layout (modes first, then positions), moved back onto the
+    /// screens if a monitor is gone; windows without a place get Winamp's defaults.
+    func applySavedLayout() {
+        let layout = Storage.defaults.data(forKey: Self.layoutKey).flatMap { try? JSONDecoder().decode(Layout.self, from: $0) }
+        if let layout {
+            doubleSize = layout.doubleSize
+            alwaysOnTop = layout.alwaysOnTop
+            timeMode = layout.timeRemaining ? .remaining : .elapsed
+            visible = [.main]
+            for c in controllers {
+                c.window.level = alwaysOnTop ? .floating : .normal
+                guard let saved = layout.windows[c.id.rawValue] else { continue }
+                c.shade = saved.shade
+                c.restore(saved.state)
+                if saved.visible { visible.insert(c.id) }
+            }
+        }
+
+        var saved: [WindowBox] = []
+        for c in controllers {
+            guard let window = layout?.windows[c.id.rawValue], let x = window.x, let y = window.y else { continue }
+            let (w, h) = c.pixelSize()
+            saved.append(WindowBox(c.id, x: x, y: y, width: w * scale, height: h * scale))
+        }
+        let home = defaultOrigin()
+        let restored = WindowDocking.restore(saved, screens: screenBoxes(), home: home)
+        var placed = Set<WindowID>()
+        for box in restored.placed {
+            setFrame(controller(box.id), box)
+            placed.insert(box.id)
+        }
+        // Defaults: the classic three stacked from `home`, the rest beside the main window.
+        var y = home.y
+        for c in [main, equalizer, playlist] as [SkinWindowController] {
+            let (w, h) = c.pixelSize()
+            if !placed.contains(c.id) || !placed.contains(.main) {
+                setFrame(c, WindowBox(c.id, x: home.x, y: y, width: w * scale, height: h * scale))
+            }
+            y = box(c).bottom
+        }
+        for c in [albumArt, navidromeLibrary, localLibrary] as [SkinWindowController]
+        where visible.contains(c.id) && (!placed.contains(c.id) || !placed.contains(.main)) {
+            placeBesideMain(c)
+        }
+        for c in controllers where !visible.contains(c.id) { c.window.orderOut(nil) }
+    }
+
+    #if DEBUG
+    /// Self test: moves a window without saving the layout.
+    func nudgeForTesting(_ id: WindowID, dx: Int, dy: Int) {
+        let c = controller(id)
+        setFrame(c, box(c).offsetBy(dx: dx, dy: dy))
+    }
+    #endif
+
+    private func defaultOrigin() -> (x: Int, y: Int) {
+        let frame = NSScreen.main?.visibleFrame ?? .zero
+        return (Int(frame.minX) + 80, Int(Self.primaryMaxY - frame.maxY) + 80)
     }
 
     // MARK: - Coordinates (global, top-left origin)
@@ -415,6 +520,7 @@ final class WindowManager: NSObject {
     }
 
     private func uiTick() {
+        model.savePosition()
         navidrome.updateScrobbling(
             url: model.nowPlayingURL, playing: model.status == .playing && model.buffering == nil,
             elapsed: model.elapsed, duration: model.duration)
@@ -447,7 +553,8 @@ final class WindowManager: NSObject {
         menu.addItem(item("Playlist Editor", #selector(togglePlaylist), on: isVisible(.playlist)))
         menu.addItem(item("Equalizer", #selector(toggleEqualizer), on: isVisible(.equalizer)))
         menu.addItem(item("Album Art", #selector(toggleAlbumArt), on: isVisible(.albumArt)))
-        menu.addItem(item("Media Library", #selector(toggleMediaLibrary), on: isVisible(.mediaLibrary)))
+        menu.addItem(item("Local Library", #selector(toggleLocalLibrary), on: isVisible(.localLibrary)))
+        menu.addItem(item("Navidrome", #selector(toggleNavidromeLibrary), on: isVisible(.navidromeLibrary)))
         menu.addItem(.separator())
         let skins = NSMenu()
         skins.addItem(item("Open Skin…", #selector(AppDelegate.openSkin(_:)), target: NSApp.delegate as AnyObject))

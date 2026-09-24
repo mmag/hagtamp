@@ -19,29 +19,65 @@ public struct NavidromeServer: Codable, Equatable, Sendable {
     }
 }
 
+/// How requests authenticate: Subsonic's token scheme, md5(password + salt).
+///
+/// With the password a new salt goes with every request. A saved token and
+/// its salt work just as well without keeping the password anywhere.
+public enum NavidromeCredentials: Codable, Equatable, Sendable {
+    case password(String)
+    case token(String, salt: String)
+
+    /// A token and salt to store instead of the password.
+    public static func token(for password: String) -> NavidromeCredentials {
+        let salt = randomSalt()
+        return .token(md5(password + salt), salt: salt)
+    }
+
+    func query() -> (token: String, salt: String) {
+        switch self {
+        case .password(let password):
+            let salt = Self.randomSalt()
+            return (Self.md5(password + salt), salt)
+        case .token(let token, let salt):
+            return (token, salt)
+        }
+    }
+
+    static func md5(_ text: String) -> String {
+        Insecure.MD5.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func randomSalt() -> String {
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyz0123456789")
+        return String((0..<12).map { _ in alphabet.randomElement()! })
+    }
+}
+
 /// Client for Navidrome's Subsonic API.
 ///
-/// Authentication uses the token scheme (md5 of password + random salt on
-/// every request). Browsing responses are cached on disk and served from
-/// the cache when the server can't be reached, so the library stays
-/// browsable offline.
+/// Browsing responses are cached on disk and served from the cache when the
+/// server can't be reached, so the library stays browsable offline.
 public final class NavidromeClient: Sendable {
     public static let apiVersion = "1.16.1"
     public static let clientName = "hagtamp"
 
     public let server: NavidromeServer
-    private let password: String
+    private let credentials: NavidromeCredentials
     private let session: URLSession
     private let responseCache: URL?
 
-    public init(server: NavidromeServer, password: String, session: URLSession = .shared, responseCache: URL? = nil) {
+    public init(server: NavidromeServer, credentials: NavidromeCredentials, session: URLSession = .shared, responseCache: URL? = nil) {
         self.server = server
-        self.password = password
+        self.credentials = credentials
         self.session = session
         self.responseCache = responseCache
         if let responseCache {
             try? FileManager.default.createDirectory(at: responseCache, withIntermediateDirectories: true)
         }
+    }
+
+    public convenience init(server: NavidromeServer, password: String, session: URLSession = .shared, responseCache: URL? = nil) {
+        self.init(server: server, credentials: .password(password), session: session, responseCache: responseCache)
     }
 
     // MARK: - Browsing
@@ -101,6 +137,44 @@ public final class NavidromeClient: Sendable {
         try await payload("getSong", key: "song", ["id": id])
     }
 
+    /// The user's favourites (starred artists, albums and songs).
+    public func starred() async throws -> NavidromeSearchResult {
+        try await payload("getStarred2", key: "starred2")
+    }
+
+    public enum StarTarget: Sendable {
+        case song(String), album(String), artist(String)
+    }
+
+    /// Adds to or removes from the favourites.
+    public func setStarred(_ starred: Bool, _ target: StarTarget) async throws {
+        let params: [String: String] =
+            switch target {
+            case .song(let id): ["id": id]
+            case .album(let id): ["albumId": id]
+            case .artist(let id): ["artistId": id]
+            }
+        _ = try await call(starred ? "star" : "unstar", params, cacheable: false)
+    }
+
+    /// Internet radio stations configured on the server.
+    public func radioStations() async throws -> [NavidromeRadioStation] {
+        struct Stations: Decodable { var internetRadioStation: [NavidromeRadioStation]? }
+        let result: Stations = try await payload("getInternetRadioStations", key: "internetRadioStations")
+        return result.internetRadioStation ?? []
+    }
+
+    /// Adds a station (admins only); for tests and scripts.
+    public func createRadioStation(name: String, streamURL: URL, homePage: URL? = nil) async throws {
+        var params = ["name": name, "streamUrl": streamURL.absoluteString]
+        if let homePage { params["homepageUrl"] = homePage.absoluteString }
+        _ = try await call("createInternetRadioStation", params, cacheable: false)
+    }
+
+    public func deleteRadioStation(id: String) async throws {
+        _ = try await call("deleteInternetRadioStation", ["id": id], cacheable: false)
+    }
+
     /// Tells the server what is playing (`submission` false) or was played.
     public func scrobble(_ songID: String, submission: Bool) async throws {
         _ = try await call("scrobble", ["id": songID, "submission": submission ? "true" : "false"], cacheable: false)
@@ -127,8 +201,7 @@ public final class NavidromeClient: Sendable {
     // MARK: - Requests
 
     func url(_ endpoint: String, _ params: [String: String] = [:]) -> URL {
-        let salt = Self.salt()
-        let token = Insecure.MD5.hash(data: Data((password + salt).utf8)).map { String(format: "%02x", $0) }.joined()
+        let (token, salt) = credentials.query()
         var components = URLComponents(url: server.url.appendingPathComponent("rest/\(endpoint)"), resolvingAgainstBaseURL: false)!
         let auth = [
             "u": server.username, "t": token, "s": salt, "v": Self.apiVersion, "c": Self.clientName, "f": "json",
@@ -136,11 +209,6 @@ public final class NavidromeClient: Sendable {
         components.queryItems = auth.merging(params) { _, new in new }.sorted { $0.key < $1.key }
             .map { URLQueryItem(name: $0.key, value: $0.value) }
         return components.url!
-    }
-
-    private static func salt() -> String {
-        let alphabet = Array("abcdefghijklmnopqrstuvwxyz0123456789")
-        return String((0..<12).map { _ in alphabet.randomElement()! })
     }
 
     private func payload<T: Decodable>(_ endpoint: String, key: String, _ params: [String: String] = [:]) async throws -> T {

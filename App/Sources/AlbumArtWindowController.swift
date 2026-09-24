@@ -31,6 +31,13 @@ final class AlbumArtWindowController: SkinWindowController {
     override func pixelSize() -> (width: Int, height: Int) { (width, height) }
     override func titleBarDoubleClicked() {}  // generic windows have no shade mode
 
+    override func savedState() -> [String: Int] { ["width": widthSteps, "height": heightSteps] }
+
+    override func restore(_ state: [String: Int]) {
+        widthSteps = max(0, state["width"] ?? widthSteps)
+        heightSteps = max(0, state["height"] ?? heightSteps)
+    }
+
     override func renderBitmap() -> Bitmap {
         var state = GenWindowState(title: "Album Art")
         state.focused = isFocused

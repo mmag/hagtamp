@@ -38,6 +38,12 @@ final class PlaylistWindowController: SkinWindowController {
     }
     override func pixelSize() -> (width: Int, height: Int) { (width, shade ? 14 : height) }
 
+    override func savedState() -> [String: Int] { ["width": widthSteps, "height": heightSteps] }
+
+    override func restore(_ state: [String: Int]) {
+        setSizeSteps(width: state["width"] ?? widthSteps, height: state["height"] ?? heightSteps)
+    }
+
     override func renderBitmap() -> Bitmap {
         followCurrentTrack()
         return PlaylistWindowRenderer.render(manager.skin, state())
@@ -410,7 +416,7 @@ final class PlaylistWindowController: SkinWindowController {
     private func addURL() {
         let alert = NSAlert()
         alert.messageText = "Add URL"
-        alert.informativeText = "Enter a stream or file URL. (Streams play from stage 5.)"
+        alert.informativeText = "Enter the address of an internet radio station (a stream, or its .pls/.m3u link)."
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         field.placeholderString = "http://"
         alert.accessoryView = field

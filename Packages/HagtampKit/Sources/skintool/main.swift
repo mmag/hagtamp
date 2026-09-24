@@ -157,11 +157,11 @@ case "library":
     // The media library window with sample content, at 2x.
     guard arguments.count == 3 else { fail(usage) }
     let skin = try Skin.load(contentsOf: URL(fileURLWithPath: arguments[1]))
-    var frame = GenWindowState(title: "Media Library")
+    var frame = GenWindowState(title: "Navidrome")
     frame.focused = true
     frame.widthSteps = 11
     frame.heightSteps = 10
-    var sidebar = ListViewModel(columns: [ListColumn("")], rows: [["Library"], ["Recently Added"], ["Playlists"]])
+    var sidebar = ListViewModel(columns: [ListColumn("")], rows: [["Library"], ["Favourites"], ["Recently Added"], ["Playlists"]])
     sidebar.showsHeader = false
     sidebar.selection = [0]
     var artists = ListViewModel(columns: [ListColumn("Artist"), ListColumn("Albums", width: 40, alignRight: true)],
