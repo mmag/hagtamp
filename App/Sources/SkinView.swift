@@ -16,6 +16,8 @@ protocol SkinViewDelegate: AnyObject {
     func scrollWheel(at point: SkinPoint, event: NSEvent)
     /// Skin cursor for a point; nil shows the system arrow.
     func cursor(at point: SkinPoint) -> SkinCursorName?
+    /// A system cursor where skins have none (column dividers); wins over `cursor(at:)`.
+    func systemCursor(at point: SkinPoint) -> NSCursor?
     func keyDown(_ event: NSEvent) -> Bool
     func filesDropped(_ urls: [URL], at point: SkinPoint)
 }
@@ -110,7 +112,12 @@ final class SkinView: NSView {
 
     private func updateCursor(_ event: NSEvent) {
         guard !isTrackingMouse else { return }
-        cursors?.show(delegate?.cursor(at: skinPoint(event)))
+        let point = skinPoint(event)
+        if let cursor = delegate?.systemCursor(at: point) {
+            cursors?.show(system: cursor)
+        } else {
+            cursors?.show(delegate?.cursor(at: point))
+        }
     }
 
     // MARK: - Drag and drop

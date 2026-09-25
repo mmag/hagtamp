@@ -36,8 +36,10 @@ public struct LibraryCatalog: Sendable {
     public private(set) var trackCount = 0
     private var albumsByArtist: [String: [Album]] = [:]
     private var tracksByAlbum: [String: [LibraryEntry]] = [:]
-    /// Folded "title artist album album-artist" per track, for search.
-    private var searchText: [URL: String] = [:]
+    /// Where each track is in `tracksByAlbum`, by path.
+    private var positions: [String: (album: String, index: Int)] = [:]
+    /// Folded "title artist album album-artist" per track path, for search.
+    private var searchText: [String: String] = [:]
 
     public init() {}
 
@@ -71,11 +73,13 @@ public struct LibraryCatalog: Sendable {
             album.added = max(album.added, entry.added)
             albumsByID[albumID] = album
             tracksByAlbum[albumID, default: []].append(entry)
-            searchText[entry.url] = [entry.title ?? entry.displayTitle, entry.artist, entry.album, entry.albumArtist]
+            searchText[entry.url.path] = [entry.title ?? entry.displayTitle, entry.artist, entry.album, entry.albumArtist]
                 .compactMap { $0 }.joined(separator: " ").folded
         }
         for (id, tracks) in tracksByAlbum {
-            tracksByAlbum[id] = tracks.sorted(by: Self.trackOrder)
+            let sorted = tracks.sorted(by: Self.trackOrder)
+            tracksByAlbum[id] = sorted
+            for (index, entry) in sorted.enumerated() { positions[entry.url.path] = (id, index) }
         }
 
         albums = albumsByID.values.sorted(by: Self.albumOrder)
@@ -97,6 +101,16 @@ public struct LibraryCatalog: Sendable {
         tracksByAlbum[id] ?? []
     }
 
+    /// A file's entry, when it is in the library.
+    public func entry(at url: URL) -> LibraryEntry? {
+        guard url.isFileURL, let position = positions[url.path] else { return nil }
+        return tracksByAlbum[position.album]?[position.index]
+    }
+
+    public func contains(_ url: URL) -> Bool {
+        entry(at: url) != nil
+    }
+
     /// Albums, newest additions first.
     public var recentlyAdded: [Album] {
         albums.sorted { $0.added > $1.added }
@@ -110,7 +124,7 @@ public struct LibraryCatalog: Sendable {
         let foundArtists = artists.filter { matches($0.name.folded) }
         let foundAlbums = albums.filter { matches("\($0.name) \($0.artist)".folded) }
         let foundTracks = albums.flatMap { album in
-            tracks(ofAlbum: album.id).filter { matches(searchText[$0.url] ?? "") }
+            tracks(ofAlbum: album.id).filter { matches(searchText[$0.url.path] ?? "") }
         }
         return (foundArtists, foundAlbums, foundTracks)
     }

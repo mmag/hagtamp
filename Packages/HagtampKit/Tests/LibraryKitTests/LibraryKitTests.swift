@@ -64,6 +64,24 @@ private func entry(
         #expect(catalog.search("   ").tracks.isEmpty)
     }
 
+    @Test func favouritesInCatalogOrder() throws {
+        var favourites = LibraryFavourites()
+        favourites.artists = [try #require(catalog.artists.first { $0.name == "Gamma" }).id, "gone"]
+        favourites.albums = [try #require(catalog.albums.first { $0.name == "Hits" }).id]
+        favourites.tracks = ["/m/Hits/02.mp3", "/m/Alpha/Best/CD1/01.flac", "/elsewhere/gone.mp3"]
+        let found = catalog.favourites(favourites)
+        #expect(found.artists.map(\.name) == ["Gamma"])
+        #expect(found.albums.map(\.name) == ["Hits"])
+        #expect(found.tracks.map(\.displayTitle) == ["One", "Song C"])
+        // Kept as they were: a drive that is away comes back.
+        let data = try JSONEncoder().encode(favourites)
+        #expect(try JSONDecoder().decode(LibraryFavourites.self, from: data) == favourites)
+        #expect(catalog.contains(URL(fileURLWithPath: "/m/Hits/02.mp3")))
+        #expect(!catalog.contains(URL(fileURLWithPath: "/elsewhere/gone.mp3")))
+        #expect(!catalog.contains(URL(string: "hagtamp-nd://song/42")!))
+        #expect(catalog.entry(at: URL(fileURLWithPath: "/m/Alpha/Best/CD2/01.flac"))?.displayTitle == "Four")
+    }
+
     @Test func yearsFromDates() {
         #expect(LibraryEntry.year(from: "1987") == 1987)
         #expect(LibraryEntry.year(from: "1987-05-01T00:00:00Z") == 1987)

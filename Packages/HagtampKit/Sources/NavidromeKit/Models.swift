@@ -53,6 +53,8 @@ public struct NavidromePlaylist: Codable, Hashable, Sendable, Identifiable {
     public var songCount: Int?
     public var duration: Int?
     public var owner: String?
+    /// Smart playlists can't be changed (OpenSubsonic).
+    public var readonly: Bool?
     public var coverArt: String?
     public var entry: [NavidromeSong]?
 }

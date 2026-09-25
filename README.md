@@ -26,7 +26,7 @@
 - Gapless playback of MP3, AAC, ALAC, FLAC, Ogg Vorbis, Opus, WavPack, Monkey's Audio, Musepack, WAV, AIFF, tracker modules and more, via [SFBAudioEngine](https://github.com/sbooth/SFBAudioEngine).
 - A 10-band equalizer with preamp and presets; `.eqf` files load and save.
 - The classic spectrum analyzer and oscilloscope, with all their styles.
-- The classic playlist editor: selection, dragging, sorting, jump to file, and `m3u`, `m3u8` and `pls` playlists.
+- The classic playlist editor: selection, dragging, sorting, jump to file, and `m3u`, `m3u8` and `pls` playlists. A right-click marks songs as favourites or adds them to a library playlist.
 - Internet radio: stream titles show in the marquee.
 - Media keys, headphone controls, Control Center and the Now Playing widget.
 - Optionally, playback resumes where it was when you quit.
@@ -35,14 +35,17 @@
 
 - A skinned library window: artists, albums, favourites, recently added, playlists and radio stations, with search.
 - Tracks start playing while they download. They stay in a cache with a size limit, and the next track is fetched ahead so playback stays gapless.
+- Right-click to mark artists, albums and songs as favourites, make and delete playlists and add songs to them; the changes go to the server.
 - Keep albums and playlists offline with a right-click. Without a connection, the library browses from its cache.
 - Covers, scrobbling and a choice of stream quality. The login is kept as a token, never the password.
 
 ### Local library
 
 - A second library window for the folders you choose. Tags are read in the background.
-- It shows artists, albums and tracks, plus recently added music, with search.
+- It shows artists, albums and tracks, favourites, recently added music and playlists, with search.
+- Favourites and playlists work as in the Navidrome window; playlists are `m3u8` files in the app's folder.
 - Folders are watched, so new and changed files show up on their own.
+- In both library windows a click on a column header sorts the list, and dragging the divider between two headers resizes the columns.
 
 ![The local library window beside the main windows](docs/screenshots/library.png)
 
@@ -85,7 +88,7 @@ The Xcode project is generated from `project.yml` and isn't checked in. Open `Ha
 - **Local library:** Preferences → Library: add your music folders, then open the library with ⌥M.
 - **Skins:** ⌥S for the skin browser, or File → Open Skin…. Skins are kept in `~/Library/Application Support/Hagtamp/Skins`.
 - **Where things live:**
-  - `~/Library/Application Support/Hagtamp` holds the playlist, library index, skins, presets and music kept offline.
+  - `~/Library/Application Support/Hagtamp` holds the playlist, library index, local favourites and playlists, skins, presets and music kept offline.
   - `~/Library/Caches/Hagtamp` holds the audio cache, covers and server responses.
 
 ### Keys

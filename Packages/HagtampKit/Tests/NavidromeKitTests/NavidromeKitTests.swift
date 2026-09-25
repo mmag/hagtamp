@@ -26,6 +26,13 @@ private func fixture(_ name: String) throws -> Data {
         #expect(query["t"] == token)
     }
 
+    @Test func listParametersRepeat() throws {
+        let url = client.url("updatePlaylist", ["playlistId": "7"], lists: ["songIdToAdd": ["a", "b"]])
+        let items = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(items.filter { $0.name == "songIdToAdd" }.map(\.value) == ["a", "b"])
+        #expect(items.contains(URLQueryItem(name: "playlistId", value: "7")))
+    }
+
     @Test func savedTokensAuthenticateWithoutThePassword() throws {
         let saved = NavidromeCredentials.token(for: "secret")
         guard case .token(let token, let salt) = saved else { throw NavidromeError(code: -1, message: "no token") }
@@ -257,6 +264,20 @@ private func fixture(_ name: String) throws -> Data {
         let after = try await client.starred()
         #expect(after.album?.contains { $0.id == album.id } != true)
         #expect(after.song?.contains { $0.id == song.id } != true)
+    }
+
+    @Test func playlistsRoundTrip() async throws {
+        let album = try #require(try await client.albumList(.alphabeticalByName).first)
+        let songs = try #require(try await client.album(album.id).song).map(\.id)
+        let name = "Test Playlist \(UUID().uuidString.prefix(6))"
+        try await client.createPlaylist(name: name, songIDs: Array(songs.prefix(2)))
+        let made = try #require(try await client.playlists().first { $0.name == name })
+        try await client.addToPlaylist(made.id, songIDs: [songs[2], songs[0]])
+        let entries = try await client.playlist(made.id).entry?.map(\.id)
+        try await client.deletePlaylist(made.id)
+        #expect(made.readonly != true && made.owner == "admin")
+        #expect(entries == [songs[0], songs[1], songs[2], songs[0]])
+        #expect(try await client.playlists().contains { $0.name == name } == false)
     }
 
     @Test func radioStationsRoundTrip() async throws {

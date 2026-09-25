@@ -52,6 +52,8 @@ public struct ListColumn: Sendable, Equatable {
     public var title: String
     /// Fixed width; nil columns share the rest.
     public var width: Int?
+    /// A flexible column's part of the rest, against the other flexible columns'.
+    public var weight = 1
     public var alignRight: Bool
 
     public init(_ title: String, width: Int? = nil, alignRight: Bool = false) {
@@ -61,10 +63,22 @@ public struct ListColumn: Sendable, Equatable {
     }
 }
 
+/// The column a list is sorted by, marked in its header.
+public struct ListSort: Sendable, Equatable {
+    public var column: Int
+    public var ascending: Bool
+
+    public init(column: Int, ascending: Bool) {
+        self.column = column
+        self.ascending = ascending
+    }
+}
+
 /// Contents of a list view (Winamp 5 media library style).
 public struct ListViewModel: Sendable, Equatable {
     public var columns: [ListColumn]
     public var rows: [[String]]
+    public var sort: ListSort?
     public var selection: Set<Int> = []
     public var firstVisibleRow = 0
     /// The list has keyboard focus (selection drawn "highlighted").
@@ -124,21 +138,56 @@ public enum GenControls {
             return Int((position * Double(hidden)).rounded())
         }
 
-        /// Column x ranges within the row area; fixed widths grow with the text.
+        /// Column x ranges within the row area; fixed widths grow with the text,
+        /// flexible columns share the rest by weight.
         public func columnRanges(_ columns: [ListColumn], textSize: TextSize = .normal) -> [Range<Int>] {
-            let columns = columns.map { column in
-                var column = column
-                column.width = column.width.map(textSize.scaled)
-                return column
-            }
-            let fixed = columns.compactMap(\.width).reduce(0, +)
-            let flexible = columns.filter { $0.width == nil }.count
-            let share = flexible > 0 ? max(0, rows.width - fixed) / flexible : 0
-            var x = rows.x
+            let fixed = columns.compactMap(\.width).map(textSize.scaled).reduce(0, +)
+            let rest = max(0, rows.width - fixed)
+            let weights = columns.filter { $0.width == nil }.map { max(1, $0.weight) }.reduce(0, +)
+            var x = rows.x, weightBefore = 0
             return columns.map { column in
-                let width = column.width ?? share
+                let width: Int
+                if let fixed = column.width {
+                    width = textSize.scaled(fixed)
+                } else {
+                    // Edges from the running weight, so the shares fill the rest exactly.
+                    let start = rest * weightBefore / weights
+                    weightBefore += max(1, column.weight)
+                    width = rest * weightBefore / weights - start
+                }
                 defer { x += width }
                 return x..<x + width
+            }
+        }
+
+        /// The divider after a column that a header point grabs (a couple of pixels either side).
+        public func divider(atX x: Int, y: Int, _ columns: [ListColumn], textSize: TextSize = .normal) -> Int? {
+            guard let header, header.contains(x: x, y: y) else { return nil }
+            let ranges = columnRanges(columns, textSize: textSize)
+            return ranges.indices.dropLast().first { abs(ranges[$0].upperBound - x) <= 2 }
+        }
+
+        /// The columns after dragging the divider after column `index` by `dx`:
+        /// it and the next trade width, none narrower than `minimum`. Fixed
+        /// columns keep their new widths, flexible ones take them as weights
+        /// (so they keep their proportions when the list is resized).
+        public func resizing(
+            _ columns: [ListColumn], divider index: Int, by dx: Int, textSize: TextSize = .normal, minimum: Int = 12
+        ) -> [ListColumn] {
+            guard columns.indices.contains(index), columns.indices.contains(index + 1) else { return columns }
+            var widths = columnRanges(columns, textSize: textSize).map(\.count)
+            let low = min(0, minimum - widths[index]), high = max(0, widths[index + 1] - minimum)
+            let dx = min(max(dx, low), high)
+            widths[index] += dx
+            widths[index + 1] -= dx
+            return zip(columns, widths).map { column, width in
+                var column = column
+                if column.width != nil {
+                    column.width = max(1, Int((Double(width) / textSize.scale).rounded()))
+                } else {
+                    column.weight = max(1, width)
+                }
+                return column
             }
         }
     }
@@ -164,14 +213,23 @@ public enum GenControls {
 
         if let header = geometry.header {
             canvas.fill(header, with: colors.listHeaderBackground)
-            for (column, range) in zip(model.columns, ranges) {
+            for (i, (column, range)) in zip(model.columns, ranges).enumerated() {
                 let cell = PixelRect(x: range.lowerBound, y: header.y, width: range.count, height: header.height)
                 // Raised header cells: light top/left edge, dark bottom/right edge.
                 canvas.fill(PixelRect(x: cell.x, y: cell.y, width: cell.width, height: 1), with: colors.listHeaderFrameTopLeft)
                 canvas.fill(PixelRect(x: cell.x, y: cell.y, width: 1, height: cell.height), with: colors.listHeaderFrameTopLeft)
                 canvas.fill(PixelRect(x: cell.x, y: cell.maxY - 1, width: cell.width, height: 1), with: colors.listHeaderFrameBottomRight)
                 canvas.fill(PixelRect(x: cell.maxX - 1, y: cell.y, width: 1, height: cell.height), with: colors.listHeaderFrameBottomRight)
-                let text = PixelRect(x: cell.x + 3, y: cell.y, width: cell.width - 6, height: cell.height)
+                var text = PixelRect(x: cell.x + 3, y: cell.y, width: cell.width - 6, height: cell.height)
+                if let sort = model.sort, sort.column == i, cell.width > 16 {
+                    // The sort column's arrow at its right end, pointing up when ascending.
+                    let left = cell.maxX - 9, top = cell.y + (cell.height - 3) / 2
+                    for row in 0..<3 {
+                        let inset = sort.ascending ? 2 - row : row
+                        canvas.fill(PixelRect(x: left + inset, y: top + row, width: 5 - 2 * inset, height: 1), with: colors.listHeaderText)
+                    }
+                    text.width -= 8
+                }
                 SystemText.draw(&canvas, column.title, in: text, color: colors.listHeaderText, fontName: font, size: size, alignment: column.alignRight ? .right : .left)
             }
         }

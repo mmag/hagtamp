@@ -195,3 +195,42 @@ import Testing
         #expect(placed.bottom <= 800 && placed.x == 375)
     }
 }
+
+@Suite struct ListColumnTests {
+    // Rows 300 pixels wide (the scrollbar takes 14), from x = 10.
+    let geometry = GenControls.listGeometry(PixelRect(x: 10, y: 0, width: 314, height: 100), showsHeader: true)
+    let columns = [
+        ListColumn("#", width: 22, alignRight: true), ListColumn("Title"), ListColumn("Artist"), ListColumn("Length", width: 40, alignRight: true),
+    ]
+
+    @Test func flexibleColumnsShareTheRestByWeight() {
+        let ranges = geometry.columnRanges(columns)
+        #expect(ranges.map(\.count) == [22, 119, 119, 40])
+        #expect(ranges.last?.upperBound == geometry.rows.maxX)
+        var weighted = columns
+        weighted[1].weight = 3
+        #expect(geometry.columnRanges(weighted).map(\.count) == [22, 178, 60, 40])
+    }
+
+    @Test func draggingADividerTradesWidthWithTheNextColumn() {
+        let wider = geometry.resizing(columns, divider: 1, by: 30)
+        #expect(geometry.columnRanges(wider).map(\.count) == [22, 149, 89, 40])
+        // A fixed column keeps its new width; the flexible ones keep theirs.
+        let number = geometry.resizing(columns, divider: 0, by: 10)
+        #expect(geometry.columnRanges(number).map(\.count) == [32, 109, 119, 40])
+        // Never narrower than the minimum.
+        let squeezed = geometry.resizing(columns, divider: 2, by: 500)
+        #expect(geometry.columnRanges(squeezed).map(\.count) == [22, 119, 147, 12])
+        // In a wider list the flexible columns keep their proportions.
+        let wide = GenControls.listGeometry(PixelRect(x: 10, y: 0, width: 374, height: 100), showsHeader: true)
+        #expect(wide.columnRanges(wider).map(\.count) == [22, 186, 112, 40])
+    }
+
+    @Test func dividersAreGrabbedInTheHeader() {
+        #expect(geometry.divider(atX: 33, y: 5, columns) == 0)
+        #expect(geometry.divider(atX: 150, y: 5, columns) == 1)
+        #expect(geometry.divider(atX: 33, y: 20, columns) == nil)  // a row
+        #expect(geometry.divider(atX: 90, y: 5, columns) == nil)
+        #expect(geometry.divider(atX: 309, y: 5, columns) == nil)  // the last column's right edge
+    }
+}

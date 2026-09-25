@@ -116,19 +116,25 @@ extension WindowManager {
     }
 
     static func askForURL(title: String, message: String) -> URL? {
+        guard let text = askForText(title: title, message: message, placeholder: "http://"), let url = URL(string: text), url.scheme != nil
+        else { return nil }
+        return url
+    }
+
+    /// A line of text, trimmed; nil when cancelled or left empty.
+    static func askForText(title: String, message: String, placeholder: String = "", button: String = "OK") -> String? {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        field.placeholderString = "http://"
+        field.placeholderString = placeholder
         alert.accessoryView = field
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: button)
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn,
-            let url = URL(string: field.stringValue.trimmingCharacters(in: .whitespaces)), url.scheme != nil
-        else { return nil }
-        return url
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let text = field.stringValue.trimmingCharacters(in: .whitespaces)
+        return text.isEmpty ? nil : text
     }
 
     /// Winamp's "Jump to time" (Ctrl+J): minutes:seconds into the current track.

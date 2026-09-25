@@ -495,11 +495,43 @@ enum SelfTest {
         await wait("local artist") { library.summary.contains("albums=1 ") && library.summary.contains("songs=2 ") }
         print("selftest: local \(library.summary)")
         snap("local-artist")
+        // Headers: Title sorts the tracks ascending, descending, then as loaded; a divider drag widens Title.
+        let title = library.headerPointForTesting(list: 2, column: 1)
+        func clickTitle() {
+            library.mouseDown(at: title, event: event(.leftMouseDown, library))
+            library.mouseUp(at: title, event: event(.leftMouseUp, library))
+        }
+        clickTitle()
+        clickTitle()
+        let descending = library.rowsForTesting(list: 2).map { $0[1] }
+        snap("local-sorted")
+        clickTitle()
+        let unsorted = library.rowsForTesting(list: 2).map { $0[1] }
+        let widths = library.columnWidthsForTesting(list: 2)
+        let divider = library.headerPointForTesting(list: 2, column: 1, divider: true)
+        let dragged = SkinPoint(x: divider.x + 30, y: divider.y)
+        library.mouseDown(at: divider, event: event(.leftMouseDown, library))
+        library.mouseDragged(to: dragged, event: event(.leftMouseDragged, library))
+        library.mouseUp(at: dragged, event: event(.leftMouseUp, library))
+        print("selftest: local headers descending=\(descending) loaded=\(unsorted) widths \(widths) -> \(library.columnWidthsForTesting(list: 2))")
+        // Favourites: an album and a track, kept in a file, listed in Favourites and unmarked there.
+        library.chooseInContextMenuForTesting("Favourite", list: 1, row: 0)
+        library.chooseInContextMenuForTesting("Favourite", list: 2, row: 1)
+        library.chooseViewForTesting(1)
+        await wait("local favourites") {
+            library.summary.contains("view=Favourites") && library.summary.contains("albums=1 ") && library.summary.contains("songs=1 ")
+        }
+        let savedFavourites = FileManager.default.fileExists(atPath: Storage.supportDirectory.appendingPathComponent("library-favourites.json").path)
+        print("selftest: local \(library.summary) saved=\(savedFavourites ? "ok" : "FAIL") menu=\(library.contextMenuTitlesForTesting(list: 2, row: 0))")
+        library.chooseInContextMenuForTesting("Favourite", list: 1, row: 0)
+        await wait("local album unmarked") { library.summary.contains("albums=0 ") && library.summary.contains("songs=1 ") }
+        library.chooseInContextMenuForTesting("Favourite", list: 2, row: 0)
+        await wait("local favourites emptied") { library.summary.contains("songs=0 ") }
         library.searchForTesting("dusk")
         await wait("local search") { library.summary.contains("songs=1 ") && library.summary.contains("artists=0 ") }
         print("selftest: local \(library.summary)")
         library.searchForTesting("")
-        library.chooseViewForTesting(1)
+        library.chooseViewForTesting(2)
         await wait("local recently added") { library.summary.contains("view=Recently Added") && library.summary.contains("albums=3 ") }
         library.selectForTesting(row: 0, in: 0)
         await wait("recent album tracks") { library.summary.contains("songs=") && !library.summary.contains("songs=0 ") }
@@ -507,6 +539,19 @@ enum SelfTest {
         await wait("local playing") { model.status == .playing && model.elapsed > 0.2 }
         print("selftest: local playing \(model.displayedTrack?.displayName ?? "-") of \(model.playlist.count)")
         snap("local-playing")
+        manager.playlist.chooseInContextMenuForTesting("Favourite", row: 0)
+        let marked = manager.playlist.contextMenuTitlesForTesting(row: 0)
+        manager.playlist.chooseInContextMenuForTesting("Favourite", row: 0)
+        print("selftest: local playlist menu=\(marked) after=\(manager.playlist.contextMenuTitlesForTesting(row: 0))")
+        // Playlists: one made with a track, the track added again from the playlist window, listed.
+        try? await service.createPlaylist(named: "Test Mix", with: [model.playlist[0].info])
+        manager.playlist.chooseInContextMenuForTesting("Add to Playlist", "Test Mix", row: 0)
+        await wait("local playlist added to") { service.editablePlaylists.first?.trackCount == 2 }
+        library.chooseViewForTesting(3)
+        await wait("local playlists") { library.summary.contains("view=Playlists") && library.summary.contains("playlists=1 ") }
+        library.selectForTesting(row: 0, in: 0)
+        await wait("local playlist tracks") { library.summary.contains("songs=2 ") }
+        print("selftest: local \(library.summary) menu=\(library.contextMenuTitlesForTesting(list: 0, row: 0))")
         model.stop()
         manager.toggleLocalLibrary()
     }
@@ -543,23 +588,25 @@ enum SelfTest {
             library.mouseDown(at: point, event: event(.leftMouseDown, library))
             library.mouseUp(at: point, event: event(.leftMouseUp, library))
         }
-        // Favourites: star an album and a song on the server, list them, unstar them again.
-        if let client = manager.navidrome.client, let albums = try? await client.albumList(.alphabeticalByName), albums.count > 1,
-            let song = try? await client.album(albums[0].id).song?.first
-        {
-            try? await client.setStarred(true, .album(albums[1].id))
-            try? await client.setStarred(true, .song(song.id))
-            clickSidebar(1)
-            await wait("favourites") {
-                library.summary.contains("view=Favourites") && library.summary.contains("albums=1 ") && library.summary.contains("songs=1 ")
-            }
-            print("selftest: library \(library.summary)")
-            snap("library-favourites")
-            try? await client.setStarred(false, .album(albums[1].id))
-            try? await client.setStarred(false, .song(song.id))
-            clickSidebar(1)  // clicking again refreshes
-            await wait("favourites refreshed") { library.summary.contains("albums=0 ") && library.summary.contains("songs=0 ") }
+        // Favourites through the menus: an album and a song starred on the server
+        // show up in Favourites, and leave it when unmarked there.
+        library.chooseInContextMenuForTesting("Favourite", list: 1, row: 1)
+        library.chooseInContextMenuForTesting("Favourite", list: 2, row: 0)
+        let marked = library.contextMenuTitlesForTesting(list: 1, row: 1)
+        clickSidebar(1)
+        await wait("favourites") {
+            library.summary.contains("view=Favourites") && library.summary.contains("albums=1 ") && library.summary.contains("songs=1 ")
         }
+        print("selftest: library \(library.summary) menu=\(marked)")
+        snap("library-favourites")
+        library.chooseInContextMenuForTesting("Favourite", list: 1, row: 0)
+        await wait("album unmarked") { library.summary.contains("albums=0 ") && library.summary.contains("songs=1 ") }
+        library.chooseInContextMenuForTesting("Favourite", list: 2, row: 0)
+        await wait("song unmarked") { library.summary.contains("songs=0 ") }
+        let left = try? await manager.navidrome.client?.starred()
+        print("selftest: favourites left on the server: \(left.map { "albums=\($0.album?.count ?? 0) songs=\($0.song?.count ?? 0)" } ?? "FAIL")")
+        clickSidebar(1)  // clicking again refreshes
+        await wait("favourites refreshed") { library.summary.contains("albums=0 ") && library.summary.contains("songs=0 ") }
         clickSidebar(2)
         await wait("recently added") { library.summary.contains("albums=4") }
         // Keep offline: the album's songs download and stay; the row gets its dot.
@@ -575,6 +622,19 @@ enum SelfTest {
         clickSidebar(3)
         await wait("playlists") { library.summary.contains("view=Playlists") && !library.summary.contains("Loading") }
         print("selftest: library \(library.summary)")
+        // A playlist made on the server with a song; the playlist window adds another later.
+        let testList = "Hagtamp Test List"
+        for left in navidrome.playlists where left.name == testList {
+            try? await navidrome.deletePlaylist(LibraryPlaylist(id: left.id, name: left.name))
+        }
+        if let client = navidrome.client, let album = try? await client.albumList(.alphabeticalByName).first,
+            let song = try? await client.album(album.id).song?.first
+        {
+            try? await navidrome.createPlaylist(named: testList, with: [NavidromeTrack.info(for: song)])
+            clickSidebar(3)  // clicking again refreshes
+            await wait("playlist made") { library.summary.contains("playlists=1 ") }
+            print("selftest: library \(library.summary) menu=\(library.contextMenuTitlesForTesting(list: 0, row: 0))")
+        }
 
         // Radio: a station on the server; a song streamed as MP3 stands in for a broadcast.
         if let client = manager.navidrome.client, let album = try? await client.albumList(.alphabeticalByName).first,
@@ -612,6 +672,19 @@ enum SelfTest {
         await wait("artist songs again") { library.summary.contains("songs=6") }
 
         library.playAllForTesting()
+        // The playlist's menu stars the songs among the selected entries.
+        await wait("songs in the playlist") { model.playlist.count == 6 }
+        manager.playlist.chooseInContextMenuForTesting("Favourite", row: 1)
+        let starredEntry = manager.playlist.contextMenuTitlesForTesting(row: 1)
+        manager.playlist.chooseInContextMenuForTesting("Favourite", row: 1)
+        _ = try? await manager.navidrome.starredOnServer()  // once the changes are there, as the server has it
+        print("selftest: playlist menu=\(starredEntry) after=\(manager.playlist.contextMenuTitlesForTesting(row: 1))")
+        manager.playlist.chooseInContextMenuForTesting("Add to Playlist", testList, row: 2)
+        await wait("added to the server playlist") { manager.navidrome.playlists.first { $0.name == testList }?.songCount == 2 }
+        for made in manager.navidrome.playlists where made.name == testList {
+            try? await manager.navidrome.deletePlaylist(LibraryPlaylist(id: made.id, name: made.name))
+        }
+        print("selftest: navidrome playlists left: \(manager.navidrome.playlists.map(\.name))")
         await wait("buffering done", seconds: 30) { model.buffering == nil && model.status == .playing && model.elapsed > 0.3 }
         // Tone 1 has made-up synced lyrics on the dev server (a .lrc next to it).
         manager.toggleLyrics()

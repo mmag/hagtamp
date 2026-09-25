@@ -389,6 +389,12 @@ final class PlaylistWindowController: SkinWindowController {
             manager.showMainMenu(for: event, in: window.skinView)
             return
         }
+        popUp(entryMenu(row: row), event)
+    }
+
+    /// A right click on an entry: Winamp's items, and for the selected entries
+    /// the favourite and playlists of the libraries they are in (Navidrome, local).
+    private func entryMenu(row: Int) -> NSMenu {
         if !playlist.isSelected(row) { model.changeSelection { $0.select(row) } }
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Play item") { [weak self] in self?.model.play(trackAt: row) })
@@ -397,7 +403,32 @@ final class PlaylistWindowController: SkinWindowController {
         menu.addItem(NSMenuItem(title: "Crop item(s)") { [weak self] in self?.model.editPlaylist { $0.crop() } })
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "File info…") { [weak self] in self?.showInfoForSelection() })
-        popUp(menu, event)
+        let tracks = playlist.selectedIndices.map { playlist[$0].info }
+        let sources: [LibrarySource] = [manager.navidrome, manager.localLibraryService]
+        let favourite = NSMenuItem.favourite(for: tracks.map(LibraryItem.track), in: sources) { [weak self] _, error in
+            if error != nil { self?.manager.showMessage("Favourites not changed") }
+        }
+        let addToPlaylist = NSMenuItem.addToPlaylist(tracks, in: sources) { [weak self] result in
+            switch result {
+            case .success(let change): self?.manager.showMessage(change.message)
+            case .failure: self?.manager.showMessage("Playlist not changed")
+            }
+        }
+        let libraryItems = [favourite, addToPlaylist].compactMap { $0 }
+        if !libraryItems.isEmpty {
+            menu.addItem(.separator())
+            libraryItems.forEach(menu.addItem)
+        }
+        return menu
+    }
+
+    /// Self test: what a right click on an entry offers.
+    func contextMenuTitlesForTesting(row: Int) -> [String] {
+        entryMenu(row: row).titlesForTesting
+    }
+
+    func chooseInContextMenuForTesting(_ titles: String..., row: Int) {
+        entryMenu(row: row).chooseForTesting(titles)
     }
 
     // MARK: - Adding, loading, saving

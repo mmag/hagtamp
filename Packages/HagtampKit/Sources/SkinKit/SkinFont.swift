@@ -35,6 +35,9 @@ public enum SkinFont {
         table[">"] = table["]"]
         table["{"] = table["["]
         table["}"] = table["]"]
+        // Typographic quotes (tags, messages) as the straight ones.
+        for c in "\u{201C}\u{201D}\u{201E}\u{00AB}\u{00BB}" { table[c] = table["\""] }
+        for c in "\u{2018}\u{2019}" { table[c] = table["'"] }
         return table
     }()
 }

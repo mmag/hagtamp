@@ -12,6 +12,7 @@ final class LocalLibraryService: LibrarySource {
     private let library: LocalLibrary
     private(set) var folders: [URL]
     private(set) var catalog = LibraryCatalog()
+    private var favourites: LibraryFavourites
     private var catalogRevision = 0
     private(set) var progress: ScanProgress?
     private var lastProgressReport = Date.distantPast
@@ -24,6 +25,8 @@ final class LocalLibraryService: LibrarySource {
     init() {
         folders = (Storage.defaults.stringArray(forKey: Self.foldersKey) ?? []).map { URL(fileURLWithPath: $0, isDirectory: true) }
         library = LocalLibrary(indexFile: Storage.supportDirectory.appendingPathComponent("library.json"))
+        favourites = (try? Data(contentsOf: Self.favouritesFile)).flatMap { try? JSONDecoder().decode(LibraryFavourites.self, from: $0) }
+            ?? LibraryFavourites()
         let library = self.library, folders = self.folders
         Task {
             await library.observe(
@@ -105,7 +108,13 @@ final class LocalLibraryService: LibrarySource {
     var windowTitle: String { "Local Library" }
 
     var views: [LibraryView] {
-        [LibraryView(title: "Audio", lists: .artistsAndAlbums), LibraryView(title: "Recently Added", lists: .albums)]
+        [
+            LibraryView(title: "Audio", lists: .artistsAndAlbums),
+            // Reloads when chosen again: the playlist's menu changes favourites too.
+            LibraryView(title: "Favourites", lists: .artistsAndAlbums, reloadsWhenChosenAgain: true, listsFavourites: true),
+            LibraryView(title: "Recently Added", lists: .albums),
+            LibraryView(title: "Playlists", lists: .playlists, reloadsWhenChosenAgain: true),
+        ]
     }
 
     var revision: String? { folders.isEmpty ? nil : "\(catalogRevision)" }
@@ -119,7 +128,17 @@ final class LocalLibraryService: LibrarySource {
     }
 
     func content(ofView index: Int) async throws -> LibraryContent {
-        index == 0 ? LibraryContent(artists: catalog.artists.map(Self.artist)) : LibraryContent(albums: catalog.recentlyAdded.map(Self.album))
+        switch index {
+        case 0:
+            return LibraryContent(artists: catalog.artists.map(Self.artist))
+        case 1:
+            let found = catalog.favourites(favourites)
+            return LibraryContent(artists: found.artists.map(Self.artist), albums: found.albums.map(Self.album), tracks: found.tracks.map(Self.track))
+        case 2:
+            return LibraryContent(albums: catalog.recentlyAdded.map(Self.album))
+        default:
+            return LibraryContent(playlists: editablePlaylists)
+        }
     }
 
     func albums(of artist: LibraryArtist) async throws -> [LibraryAlbum] {
@@ -130,11 +149,104 @@ final class LocalLibraryService: LibrarySource {
         albums.flatMap { catalog.tracks(ofAlbum: $0.id) }.map(Self.track)
     }
 
-    func tracks(of playlist: LibraryPlaylist) async throws -> [LibraryTrack] { [] }
+    /// A playlist's files with their tags from the library.
+    func tracks(of playlist: LibraryPlaylist) async throws -> [LibraryTrack] {
+        try PlaylistFile.read(URL(fileURLWithPath: playlist.id)).map { info in
+            catalog.entry(at: info.url).map(Self.track) ?? LibraryTrack(info: info)
+        }
+    }
 
     func search(_ query: String) async throws -> LibraryContent {
         let found = catalog.search(query)
         return LibraryContent(artists: found.artists.map(Self.artist), albums: found.albums.map(Self.album), tracks: found.tracks.map(Self.track))
+    }
+
+    // MARK: - Favourites
+
+    private static var favouritesFile: URL { Storage.supportDirectory.appendingPathComponent("library-favourites.json") }
+
+    /// Artists and albums of the catalog, and tracks when they are in the library.
+    func isFavourite(_ item: LibraryItem) -> Bool? {
+        switch item {
+        case .artist(let artist): favourites.artists.contains(artist.id)
+        case .album(let album): favourites.albums.contains(album.id)
+        case .playlist: nil
+        case .track(let info): catalog.contains(info.url) ? favourites.tracks.contains(info.url.path) : nil
+        }
+    }
+
+    func setFavourite(_ items: [LibraryItem], _ favourite: Bool) -> Task<Void, Error> {
+        func mark(_ ids: inout Set<String>, _ id: String) {
+            if favourite { ids.insert(id) } else { ids.remove(id) }
+        }
+        var changed = favourites
+        for item in items where isFavourite(item) != nil {
+            switch item {
+            case .artist(let artist): mark(&changed.artists, artist.id)
+            case .album(let album): mark(&changed.albums, album.id)
+            case .playlist: break
+            case .track(let info): mark(&changed.tracks, info.url.path)
+            }
+        }
+        do {
+            try JSONEncoder().encode(changed).write(to: Self.favouritesFile, options: .atomic)
+            favourites = changed
+            return Task {}
+        } catch {
+            return Task { throw error }
+        }
+    }
+
+    // MARK: - Playlists
+
+    /// Playlist files in the app's folder (.m3u8 when made here); the id is the path.
+    static var playlistFolder: URL { Storage.supportDirectory.appendingPathComponent("Playlists", isDirectory: true) }
+
+    var editsPlaylists: Bool { true }
+
+    /// Read from the folder each time: it is small, and files may come and go there.
+    var editablePlaylists: [LibraryPlaylist] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: Self.playlistFolder, includingPropertiesForKeys: nil)) ?? []
+        return files.filter(PlaylistFile.isPlaylist).map { file in
+            let tracks = (try? PlaylistFile.read(file)) ?? []
+            return LibraryPlaylist(
+                id: file.path, name: file.deletingPathExtension().lastPathComponent, trackCount: tracks.count,
+                duration: Int(tracks.compactMap(\.duration).reduce(0, +).rounded()))
+        }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    func canAddToPlaylist(_ track: TrackInfo) -> Bool {
+        catalog.contains(track.url)
+    }
+
+    func createPlaylist(named name: String, with tracks: [TrackInfo]) async throws {
+        // A name is a file name: no slashes or colons, not hidden.
+        var fileName = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        if fileName.hasPrefix(".") { fileName = "_" + fileName.dropFirst() }
+        let file = Self.playlistFolder.appendingPathComponent(fileName).appendingPathExtension("m3u8")
+        guard !editablePlaylists.contains(where: { $0.name.localizedCaseInsensitiveCompare(fileName) == .orderedSame }) else {
+            throw LibraryError("There is a playlist named “\(fileName)” already.")
+        }
+        try FileManager.default.createDirectory(at: Self.playlistFolder, withIntermediateDirectories: true)
+        try write([], adding: tracks, to: file)
+    }
+
+    func add(_ tracks: [TrackInfo], to playlist: LibraryPlaylist) async throws {
+        let file = URL(fileURLWithPath: playlist.id)
+        try write(PlaylistFile.read(file), adding: tracks, to: file)
+    }
+
+    /// Into the Trash, where it can be taken back from.
+    func deletePlaylist(_ playlist: LibraryPlaylist) async throws {
+        try FileManager.default.trashItem(at: URL(fileURLWithPath: playlist.id), resultingItemURL: nil)
+    }
+
+    /// The library's tracks among `tracks` go after `entries`, with their tags.
+    private func write(_ entries: [TrackInfo], adding tracks: [TrackInfo], to file: URL) throws {
+        let added = tracks.compactMap { catalog.entry(at: $0.url).map(Self.track)?.info }
+        let format: PlaylistFile.Format = file.pathExtension.lowercased() == "pls" ? .pls : .m3u8
+        try PlaylistFile.data(for: entries + added, format: format, base: file.deletingLastPathComponent()).write(to: file, options: .atomic)
     }
 
     private static func artist(_ artist: LibraryCatalog.Artist) -> LibraryArtist {

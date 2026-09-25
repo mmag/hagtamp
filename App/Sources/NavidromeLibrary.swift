@@ -10,9 +10,9 @@ extension NavidromeService: LibrarySource {
     var views: [LibraryView] {
         [
             LibraryView(title: "Library", lists: .artistsAndAlbums),
-            LibraryView(title: "Favourites", lists: .artistsAndAlbums, reloadsWhenChosenAgain: true),
+            LibraryView(title: "Favourites", lists: .artistsAndAlbums, reloadsWhenChosenAgain: true, listsFavourites: true),
             LibraryView(title: "Recently Added", lists: .albums),
-            LibraryView(title: "Playlists", lists: .playlists),
+            LibraryView(title: "Playlists", lists: .playlists, reloadsWhenChosenAgain: true),
             LibraryView(title: "Radio", lists: .stations),
         ]
     }
@@ -30,6 +30,7 @@ extension NavidromeService: LibrarySource {
         switch item {
         case .album(let album): isKeptOffline(.album, id: album.id)
         case .playlist(let playlist): isKeptOffline(.playlist, id: playlist.id)
+        case .artist, .track: nil
         }
     }
 
@@ -37,9 +38,61 @@ extension NavidromeService: LibrarySource {
         switch item {
         case .album(let album): setKeptOffline(.album, id: album.id, name: album.name, keep)
         case .playlist(let playlist): setKeptOffline(.playlist, id: playlist.id, name: playlist.name, keep)
+        case .artist, .track: break
         }
     }
+
+    /// Favourites are what is starred on the server.
+    func isFavourite(_ item: LibraryItem) -> Bool? {
+        guard client != nil, let target = Self.starTarget(item) else { return nil }
+        return isStarred(target)
+    }
+
+    func setFavourite(_ items: [LibraryItem], _ favourite: Bool) -> Task<Void, Error> {
+        setStarred(items.compactMap(Self.starTarget), favourite)
+    }
+
+    /// Playlists can't be starred; tracks can when they are the server's songs.
+    private static func starTarget(_ item: LibraryItem) -> NavidromeClient.StarTarget? {
+        switch item {
+        case .artist(let artist): .artist(artist.id)
+        case .album(let album): .album(album.id)
+        case .playlist: nil
+        case .track(let info): NavidromeTrack.songID(from: info.url).map { .song($0) }
+        }
+    }
+
     var tracksHaveTags: Bool { true }
+
+    // MARK: Playlists
+
+    var editsPlaylists: Bool { client != nil }
+
+    var editablePlaylists: [LibraryPlaylist] {
+        playlists.filter(canEdit).map(libraryPlaylist)
+    }
+
+    func canAddToPlaylist(_ track: TrackInfo) -> Bool {
+        client != nil && NavidromeTrack.songID(from: track.url) != nil
+    }
+
+    func createPlaylist(named name: String, with tracks: [TrackInfo]) async throws {
+        try await connectedClient.createPlaylist(name: name, songIDs: tracks.compactMap { NavidromeTrack.songID(from: $0.url) })
+        _ = try? await refreshPlaylists()
+    }
+
+    func add(_ tracks: [TrackInfo], to playlist: LibraryPlaylist) async throws {
+        try await connectedClient.addToPlaylist(playlist.id, songIDs: tracks.compactMap { NavidromeTrack.songID(from: $0.url) })
+        _ = try? await refreshPlaylists()
+        // Kept offline, its new songs download too.
+        if isKeptOffline(.playlist, id: playlist.id) { syncOffline() }
+    }
+
+    func deletePlaylist(_ playlist: LibraryPlaylist) async throws {
+        try await connectedClient.deletePlaylist(playlist.id)
+        if isKeptOffline(.playlist, id: playlist.id) { setKeptOffline(.playlist, id: playlist.id, name: playlist.name, false) }
+        _ = try? await refreshPlaylists()
+    }
 
     private var connectedClient: NavidromeClient {
         get throws {
@@ -54,14 +107,14 @@ extension NavidromeService: LibrarySource {
         case 0:
             return LibraryContent(artists: try await client.artists().map(Self.artist))
         case 1:
-            let starred = try await client.starred()
+            let starred = try await starredOnServer()
             return LibraryContent(
                 artists: (starred.artist ?? []).map(Self.artist), albums: (starred.album ?? []).map(Self.album),
                 tracks: (starred.song ?? []).map(Self.track))
         case 2:
             return LibraryContent(albums: try await client.albumList(.newest, size: 200).map(Self.album))
         case 3:
-            return LibraryContent(playlists: try await client.playlists().map(Self.playlist))
+            return LibraryContent(playlists: try await refreshPlaylists().map(libraryPlaylist))
         default:
             let stations = try await client.radioStations().compactMap { station in
                 URL(string: station.streamUrl).map { LibraryTrack(info: TrackInfo(url: $0, title: station.name), number: nil) }
@@ -112,8 +165,9 @@ extension NavidromeService: LibrarySource {
         LibraryAlbum(id: album.id, name: album.name, artist: album.artist, year: album.year)
     }
 
-    private static func playlist(_ playlist: NavidromePlaylist) -> LibraryPlaylist {
-        LibraryPlaylist(id: playlist.id, name: playlist.name, trackCount: playlist.songCount, duration: playlist.duration)
+    private func libraryPlaylist(_ playlist: NavidromePlaylist) -> LibraryPlaylist {
+        LibraryPlaylist(
+            id: playlist.id, name: playlist.name, trackCount: playlist.songCount, duration: playlist.duration, editable: canEdit(playlist))
     }
 
     private static func track(_ song: NavidromeSong) -> LibraryTrack {

@@ -114,6 +114,12 @@ final class NavidromeService: RemoteTrackResolver {
     private func connect(_ server: NavidromeServer, credentials: NavidromeCredentials?) {
         self.server = server
         client = credentials.map { NavidromeClient(server: server, credentials: $0, responseCache: Self.responseFolder) }
+        starred = []
+        playlists = []
+        Task {
+            _ = try? await starredOnServer()
+            _ = try? await refreshPlaylists()
+        }
     }
 
     /// The same server at a new address (say an IP address replaced by a
@@ -360,6 +366,75 @@ final class NavidromeService: RemoteTrackResolver {
     private func protectOfflineSongs() {
         let prefixes = Set(Self.savedPins().flatMap { key, pins in pins.flatMap(\.songIDs).map { "\(key)-\($0)-" } })
         Task { await audioCache.keepOffline(keyPrefixes: prefixes) }
+    }
+
+    // MARK: - Favourites
+
+    /// What is starred on the server: as it last listed it, with the changes made here since.
+    private var starred: Set<NavidromeClient.StarTarget> = []
+    /// Changes on their way to the server, one after the other.
+    private var starring: Task<Void, Never>?
+
+    func isStarred(_ target: NavidromeClient.StarTarget) -> Bool {
+        starred.contains(target)
+    }
+
+    /// Marks at once, then tells the server once the earlier changes have
+    /// reached it; what it doesn't take goes back as it was. The task ends
+    /// when the server has it.
+    @discardableResult
+    func setStarred(_ targets: [NavidromeClient.StarTarget], _ star: Bool) -> Task<Void, Error> {
+        guard let client else { return Task { throw NavidromeError(code: -1, message: "Navidrome is not set up.") } }
+        let before = starred
+        for target in targets { mark(target, star) }
+        let previous = starring
+        let request = Task {
+            await previous?.value
+            for (i, target) in targets.enumerated() {
+                do {
+                    try await client.setStarred(star, target)
+                } catch {
+                    for target in targets[i...] { self.mark(target, before.contains(target)) }
+                    throw error
+                }
+            }
+        }
+        starring = Task { _ = await request.result }
+        return request
+    }
+
+    /// The favourites as the server lists them, after the changes made here.
+    func starredOnServer() async throws -> NavidromeSearchResult {
+        guard let client else { throw NavidromeError(code: -1, message: "Navidrome is not set up.") }
+        await starring?.value
+        let result = try await client.starred()
+        guard self.client === client else { return result }
+        starred = Set(
+            (result.artist ?? []).map { .artist($0.id) } + (result.album ?? []).map { .album($0.id) }
+                + (result.song ?? []).map { .song($0.id) })
+        return result
+    }
+
+    private func mark(_ target: NavidromeClient.StarTarget, _ star: Bool) {
+        if star { starred.insert(target) } else { starred.remove(target) }
+    }
+
+    // MARK: - Playlists
+
+    /// The server's playlists as last listed, for menus that can't wait.
+    private(set) var playlists: [NavidromePlaylist] = []
+
+    @discardableResult
+    func refreshPlaylists() async throws -> [NavidromePlaylist] {
+        guard let client else { throw NavidromeError(code: -1, message: "Navidrome is not set up.") }
+        let result = try await client.playlists()
+        if self.client === client { playlists = result }
+        return result
+    }
+
+    /// The user's own playlists, smart ones aside.
+    func canEdit(_ playlist: NavidromePlaylist) -> Bool {
+        playlist.readonly != true && (playlist.owner == nil || playlist.owner == server?.username)
     }
 
     // MARK: - Lyrics

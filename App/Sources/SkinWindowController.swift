@@ -170,6 +170,8 @@ class SkinWindowController: NSObject, SkinViewDelegate {
         regions().hit(x: point.x, y: point.y)?.cursor ?? bodyCursor
     }
 
+    func systemCursor(at point: SkinPoint) -> NSCursor? { nil }
+
     func keyDown(_ event: NSEvent) -> Bool { manager.handleKey(event) }
 
     func filesDropped(_ urls: [URL], at point: SkinPoint) { manager.filesDropped(urls, on: id, at: point) }

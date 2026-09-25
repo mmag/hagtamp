@@ -143,6 +143,19 @@ public final class NavidromeClient: Sendable {
         try await payload("getPlaylist", key: "playlist", ["id": id])
     }
 
+    public func createPlaylist(name: String, songIDs: [String] = []) async throws {
+        _ = try await call("createPlaylist", ["name": name], lists: ["songId": songIDs], cacheable: false)
+    }
+
+    /// Adds songs at the end of a playlist.
+    public func addToPlaylist(_ id: String, songIDs: [String]) async throws {
+        _ = try await call("updatePlaylist", ["playlistId": id], lists: ["songIdToAdd": songIDs], cacheable: false)
+    }
+
+    public func deletePlaylist(_ id: String) async throws {
+        _ = try await call("deletePlaylist", ["id": id], cacheable: false)
+    }
+
     public func song(_ id: String) async throws -> NavidromeSong {
         try await payload("getSong", key: "song", ["id": id])
     }
@@ -152,7 +165,7 @@ public final class NavidromeClient: Sendable {
         try await payload("getStarred2", key: "starred2")
     }
 
-    public enum StarTarget: Sendable {
+    public enum StarTarget: Hashable, Sendable {
         case song(String), album(String), artist(String)
     }
 
@@ -248,7 +261,8 @@ public final class NavidromeClient: Sendable {
 
     // MARK: - Requests
 
-    func url(_ endpoint: String, _ params: [String: String] = [:]) -> URL {
+    /// `lists` are parameters given once per value (`songId=1&songId=2`).
+    func url(_ endpoint: String, _ params: [String: String] = [:], lists: [String: [String]] = [:]) -> URL {
         let (token, salt) = credentials.query()
         var components = URLComponents(url: server.url.appendingPathComponent("rest/\(endpoint)"), resolvingAgainstBaseURL: false)!
         let auth = [
@@ -256,6 +270,7 @@ public final class NavidromeClient: Sendable {
         ]
         components.queryItems = auth.merging(params) { _, new in new }.sorted { $0.key < $1.key }
             .map { URLQueryItem(name: $0.key, value: $0.value) }
+            + lists.sorted { $0.key < $1.key }.flatMap { name, values in values.map { URLQueryItem(name: name, value: $0) } }
         return components.url!
     }
 
@@ -268,11 +283,13 @@ public final class NavidromeClient: Sendable {
 
     /// The `subsonic-response` object of a call; cacheable calls fall back to
     /// the last good response when the server can't be reached.
-    private func call(_ endpoint: String, _ params: [String: String] = [:], cacheable: Bool) async throws -> [String: Any] {
+    private func call(
+        _ endpoint: String, _ params: [String: String] = [:], lists: [String: [String]] = [:], cacheable: Bool
+    ) async throws -> [String: Any] {
         let cacheFile = cacheable ? cacheURL(endpoint, params) : nil
         let data: Data
         do {
-            let (fetched, response) = try await session.data(from: url(endpoint, params))
+            let (fetched, response) = try await session.data(from: url(endpoint, params, lists: lists))
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 throw NavidromeError(code: -http.statusCode, message: "HTTP \(http.statusCode)")
             }

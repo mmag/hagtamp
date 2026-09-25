@@ -21,10 +21,21 @@ final class LibraryWindowController: SkinWindowController {
     private var search = ""
     private var searchResults: LibraryContent?
 
+    /// The lists as loaded; the four below show them in their sort order.
+    private var loaded = LibraryContent() {
+        didSet { sortLists() }
+    }
     private var artists: [LibraryArtist] = []
     private var albums: [LibraryAlbum] = []
     private var playlists: [LibraryPlaylist] = []
     private var tracks: [LibraryTrack] = []
+    /// Per kind of list: the loaded index of each row shown.
+    private var orders: [ListKind: [Int]] = [:]
+    /// Per view and list ("<view>.<list>"); unsorted lists keep the order they came in.
+    private var sorts: [String: ListSort] = [:]
+    /// Per kind of list, as its dividers were dragged: fixed widths and flexible weights.
+    private var columnSizes: [ListKind: [Int]] = [:]
+    private var columnDrag: (list: Int, divider: Int, columns: [ListColumn], x: Int)?
     /// Per list: selection and scroll (0-1 = upper lists, 2 = tracks).
     private var selection: [Int: Set<Int>] = [:]
     private var scroll: [Int: Int] = [:]
@@ -72,12 +83,31 @@ final class LibraryWindowController: SkinWindowController {
     override func pixelSize() -> (width: Int, height: Int) { (width, height) }
     override func titleBarDoubleClicked() {}
 
-    override func savedState() -> [String: Int] { ["width": widthSteps, "height": heightSteps, "view": viewIndex] }
+    /// Sorts as "sort.<view>.<list>" = ±(column + 1), column sizes as "columns.<kind>.<column>".
+    override func savedState() -> [String: Int] {
+        var state = ["width": widthSteps, "height": heightSteps, "view": viewIndex]
+        for (id, sort) in sorts { state["sort.\(id)"] = (sort.column + 1) * (sort.ascending ? 1 : -1) }
+        for (kind, sizes) in columnSizes {
+            for (column, size) in sizes.enumerated() { state["columns.\(kind.rawValue).\(column)"] = size }
+        }
+        return state
+    }
 
     override func restore(_ state: [String: Int]) {
         widthSteps = max(7, state["width"] ?? widthSteps)
         heightSteps = max(6, state["height"] ?? heightSteps)
         viewIndex = min(max(0, state["view"] ?? 0), source.views.count - 1)
+        var sizes: [ListKind: [Int: Int]] = [:]
+        for (key, value) in state {
+            let parts = key.split(separator: ".").map(String.init)
+            guard parts.count == 3 else { continue }
+            if parts[0] == "sort", value != 0 {
+                sorts["\(parts[1]).\(parts[2])"] = ListSort(column: abs(value) - 1, ascending: value > 0)
+            } else if parts[0] == "columns", let kind = ListKind(rawValue: parts[1]), let column = Int(parts[2]), value > 0 {
+                sizes[kind, default: [:]][column] = value
+            }
+        }
+        columnSizes = sizes.mapValues { sizes in (0..<sizes.count).compactMap { sizes[$0] } }
     }
 
     // MARK: - State
@@ -115,7 +145,7 @@ final class LibraryWindowController: SkinWindowController {
         (0..<upperCount).map { model(for: $0) }
     }
 
-    private enum ListKind { case artists, albums, playlists, tracks, stations }
+    private enum ListKind: String { case artists, albums, playlists, tracks, stations }
 
     private func kind(of list: Int) -> ListKind {
         switch (view.lists, list) {
@@ -127,8 +157,25 @@ final class LibraryWindowController: SkinWindowController {
         }
     }
 
+    /// The list showing a kind in this view.
+    private func list(showing kind: ListKind) -> Int? {
+        ((0..<upperCount) + [Self.tracksList]).first { self.kind(of: $0) == kind }
+    }
+
+    /// A kind's columns, sized as their dividers were dragged.
     private func columns(for list: Int) -> [ListColumn] {
-        switch kind(of: list) {
+        let kind = kind(of: list)
+        var columns = Self.columns(kind)
+        if let sizes = columnSizes[kind], sizes.count == columns.count {
+            for i in columns.indices {
+                if columns[i].width != nil { columns[i].width = sizes[i] } else { columns[i].weight = sizes[i] }
+            }
+        }
+        return columns
+    }
+
+    private static func columns(_ kind: ListKind) -> [ListColumn] {
+        switch kind {
         case .artists: [ListColumn("Artist"), ListColumn("Albums", width: 40, alignRight: true)]
         case .albums: [ListColumn("Album"), ListColumn("Artist"), ListColumn("Year", width: 34, alignRight: true)]
         case .playlists: [ListColumn("Playlist"), ListColumn("Tracks", width: 40, alignRight: true), ListColumn("Length", width: 44, alignRight: true)]
@@ -158,6 +205,81 @@ final class LibraryWindowController: SkinWindowController {
         }
     }
 
+    /// What a column sorts by: numbers as numbers, text the way Finder sorts
+    /// names; missing values first.
+    private enum SortKey {
+        case number(Double?)
+        case text(String)
+
+        static func number(_ value: Int?) -> SortKey { .number(value.map(Double.init)) }
+
+        func compare(_ other: SortKey) -> ComparisonResult {
+            switch (self, other) {
+            case (.number(let a), .number(let b)):
+                let a = a ?? -.infinity, b = b ?? -.infinity
+                return a < b ? .orderedAscending : a > b ? .orderedDescending : .orderedSame
+            case (.text(let a), .text(let b)):
+                return a.localizedStandardCompare(b)
+            default:
+                return .orderedSame
+            }
+        }
+    }
+
+    /// Shows the loaded lists in their sort order; each kind's keys follow its columns.
+    private func sortLists() {
+        func sorted<T>(_ items: [T], _ kind: ListKind, _ keys: [(T) -> SortKey]) -> [T] {
+            var order = Array(items.indices)
+            if let list = list(showing: kind), let sort = sorts[sortID(list)], keys.indices.contains(sort.column) {
+                let values = items.map(keys[sort.column])
+                // Ties keep the loaded order (an artist's tracks stay in album order).
+                order.sort { a, b in
+                    switch values[a].compare(values[b]) {
+                    case .orderedSame: a < b
+                    case .orderedAscending: sort.ascending
+                    case .orderedDescending: !sort.ascending
+                    }
+                }
+            }
+            orders[kind] = order
+            return order.map { items[$0] }
+        }
+        artists = sorted(loaded.artists, .artists, [{ .text($0.name) }, { .number($0.albumCount) }])
+        albums = sorted(loaded.albums, .albums, [{ .text($0.name) }, { .text($0.artist ?? "") }, { .number($0.year) }])
+        playlists = sorted(loaded.playlists, .playlists, [{ .text($0.name) }, { .number($0.trackCount) }, { .number($0.duration) }])
+        tracks =
+            view.lists == .stations
+            ? sorted(loaded.tracks, .stations, [{ .text($0.info.title ?? "") }, { .text($0.info.url.absoluteString) }])
+            : sorted(
+                loaded.tracks, .tracks,
+                [
+                    { .number($0.number) }, { .text($0.info.title ?? $0.info.displayName) }, { .text($0.info.artist ?? "") },
+                    { .text($0.info.album ?? "") }, { .number($0.info.duration) },
+                ])
+    }
+
+    private func sortID(_ list: Int) -> String { "\(viewIndex).\(list)" }
+
+    /// A header was clicked: sorted ascending, then descending, then as loaded.
+    /// Selected rows stay selected.
+    private func sortByColumn(_ column: Int, in list: Int) {
+        let id = sortID(list), kind = kind(of: list)
+        switch sorts[id] {
+        case let sort? where sort.column == column && sort.ascending: sorts[id] = ListSort(column: column, ascending: false)
+        case let sort? where sort.column == column: sorts[id] = nil
+        default: sorts[id] = ListSort(column: column, ascending: true)
+        }
+        let before = orders[kind] ?? []
+        sortLists()
+        var row: [Int: Int] = [:]
+        for (shown, index) in (orders[kind] ?? []).enumerated() { row[index] = shown }
+        func moved(_ old: Int) -> Int? { before.indices.contains(old) ? row[before[old]] : nil }
+        selection[list] = Set((selection[list] ?? []).compactMap(moved))
+        anchor[list] = anchor[list].flatMap(moved)
+        manager.saveLayout()
+        changed()
+    }
+
     /// Albums and playlists kept offline are marked with a dot.
     private func offlineMark(_ item: LibraryItem) -> String {
         source.isKeptOffline(item) == true ? "● " : ""
@@ -166,6 +288,7 @@ final class LibraryWindowController: SkinWindowController {
     private func model(for list: Int) -> ListViewModel {
         var model = ListViewModel(columns: columns(for: list), rows: rows(for: list))
         model.selection = selection[list] ?? []
+        model.sort = sorts[sortID(list)]
         model.firstVisibleRow = scroll[list] ?? 0
         model.focused = isFocused && (list == Self.tracksList ? focus == .tracks : focus == .upper(list))
         model.placeholder = loading[list]
@@ -211,10 +334,7 @@ final class LibraryWindowController: SkinWindowController {
     }
 
     private func clearLists() {
-        artists = []
-        albums = []
-        playlists = []
-        tracks = []
+        loaded = LibraryContent()
         selection = [:]
         scroll = [:]
     }
@@ -255,29 +375,28 @@ final class LibraryWindowController: SkinWindowController {
     }
 
     private func show(_ content: LibraryContent) {
-        artists = content.artists
-        albums = content.albums
-        playlists = content.playlists
-        showTracks(content.tracks)
+        loaded = content
+        playIfWaiting()
     }
 
     /// A row of an upper list was selected: load what it contains.
     private func selected(row: Int, in list: Int) {
         loadGeneration += 1
         let source = self.source
-        tracks = []
+        loaded.tracks = []
         selection[Self.tracksList] = []
         scroll[Self.tracksList] = 0
         switch kind(of: list) {
         case .artists:
             guard artists.indices.contains(row) else { return }
             let artist = artists[row]
-            albums = []
+            loaded.albums = []
             selection[1] = []
             scroll[1] = 0
             load(into: 1, { try await source.albums(of: artist) }) { [weak self] albums in
-                self?.albums = albums
-                self?.loadTracks(of: albums)
+                guard let self else { return }
+                self.loaded.albums = albums
+                self.loadTracks(of: self.albums)  // in the order shown
             }
         case .albums:
             guard albums.indices.contains(row) else { return }
@@ -297,11 +416,14 @@ final class LibraryWindowController: SkinWindowController {
     }
 
     private func showTracks(_ tracks: [LibraryTrack]) {
-        self.tracks = tracks
-        if playWhenLoaded {
-            playWhenLoaded = false
-            play(tracks, startingAt: 0)
-        }
+        loaded.tracks = tracks
+        playIfWaiting()
+    }
+
+    private func playIfWaiting() {
+        guard playWhenLoaded else { return }
+        playWhenLoaded = false
+        play(tracks, startingAt: 0)
     }
 
     private func runSearch() {
@@ -394,6 +516,9 @@ final class LibraryWindowController: SkinWindowController {
     private func listPressed(_ list: Int, at point: SkinPoint, event: NSEvent) -> Bool {
         focus = list == Self.tracksList ? .tracks : .upper(list)
         let g = geometry(list)
+        if let header = g.header, header.contains(x: point.x, y: point.y) {
+            return headerPressed(list, at: point, geometry: g)
+        }
         let rowCount = rows(for: list).count
         let first = scroll[list] ?? 0
         if g.scrollbar.contains(x: point.x, y: point.y) {
@@ -442,6 +567,28 @@ final class LibraryWindowController: SkinWindowController {
         return false
     }
 
+    /// A divider starts resizing its column; elsewhere the header sorts the list.
+    private func headerPressed(_ list: Int, at point: SkinPoint, geometry g: GenControls.ListGeometry) -> Bool {
+        let columns = columns(for: list)
+        if let divider = g.divider(atX: point.x, y: point.y, columns, textSize: manager.textSize) {
+            columnDrag = (list, divider, columns, point.x)
+            return true
+        }
+        if let column = g.columnRanges(columns, textSize: manager.textSize).firstIndex(where: { $0.contains(point.x) }) {
+            sortByColumn(column, in: list)
+        }
+        return false
+    }
+
+    override func systemCursor(at point: SkinPoint) -> NSCursor? {
+        let onDivider = ((0..<upperCount) + [Self.tracksList]).contains { list in
+            geometry(list).divider(atX: point.x, y: point.y, columns(for: list), textSize: manager.textSize) != nil
+        }
+        guard onDivider || columnDrag != nil else { return nil }
+        if #available(macOS 15, *) { return .columnResize }
+        return .resizeLeftRight
+    }
+
     override func pressDragged(_ control: Control, to point: SkinPoint, event: NSEvent) {
         if control == .resize, let start = resizeStart {
             let now = NSEvent.mouseLocation
@@ -453,6 +600,13 @@ final class LibraryWindowController: SkinWindowController {
             widthSteps = newWidth
             heightSteps = newHeight
             manager.windowSizeChanged()
+            return
+        }
+        if let drag = columnDrag {
+            let resized = geometry(drag.list).resizing(
+                drag.columns, divider: drag.divider, by: point.x - drag.x, textSize: manager.textSize, minimum: manager.textSize.scaled(12))
+            columnSizes[kind(of: drag.list)] = resized.map { $0.width ?? $0.weight }
+            changed()
             return
         }
         if let drag = thumbDrag {
@@ -473,6 +627,10 @@ final class LibraryWindowController: SkinWindowController {
     override func pressEnded(_ control: Control, at point: SkinPoint, event: NSEvent) {
         resizeStart = nil
         thumbDrag = nil
+        if columnDrag != nil {
+            columnDrag = nil
+            manager.saveLayout()
+        }
         if let button = pressedButton {
             pressedButton = nil
             if layout.buttons[button]?.contains(x: point.x, y: point.y) == true { perform(button) }
@@ -556,22 +714,33 @@ final class LibraryWindowController: SkinWindowController {
         return true
     }
 
-    /// On an album, playlist or track: play, enqueue and (Navidrome) keep offline;
-    /// elsewhere the main menu.
+    /// On a row its menu; elsewhere the main menu.
     override func contextMenuRequested(at point: SkinPoint, event: NSEvent) {
-        guard let (list, row) = row(at: point) else {
+        guard let list = list(at: point), let menu = contextMenu(list: list, row: row(at: point, in: list)) else {
             manager.showMainMenu(for: event, in: window.skinView)
             return
         }
-        let menu = NSMenu()
-        let source = self.source, model = manager.model
-        switch kind(of: list) {
-        case .albums, .playlists:
-            let item: LibraryItem = kind(of: list) == .albums ? .album(albums[row]) : .playlist(playlists[row])
-            menu.addItem(NSMenuItem(title: "Play") { [weak self] in
+        NSMenu.popUpContextMenu(menu, with: event, for: window.skinView)
+    }
+
+    /// On an album, playlist or track: play, enqueue, (Navidrome) keep
+    /// offline, favourite; tracks go into playlists; playlists are made and
+    /// deleted (also below the last one). On an artist favourite.
+    private func contextMenu(list: Int, row: Int?) -> NSMenu? {
+        let source = self.source, model = manager.model, viewIndex = self.viewIndex
+        var play: [NSMenuItem] = [], toggles: [NSMenuItem] = [], playlistItems: [NSMenuItem] = []
+        var favourites: [LibraryItem] = []
+        let kind = kind(of: list)
+        if kind == .playlists, source.editsPlaylists {
+            playlistItems.append(NSMenuItem.newPlaylist(in: source, with: []) { [weak self] in self?.playlistsChanged($0, inView: viewIndex) })
+        }
+        switch (kind, row) {
+        case (.albums, let row?), (.playlists, let row?):
+            let item: LibraryItem = kind == .albums ? .album(albums[row]) : .playlist(playlists[row])
+            play.append(NSMenuItem(title: "Play") { [weak self] in
                 Task { if let tracks = try? await source.tracks(of: item) { self?.play(tracks, startingAt: 0) } }
             })
-            menu.addItem(NSMenuItem(title: "Enqueue") {
+            play.append(NSMenuItem(title: "Enqueue") {
                 Task {
                     if let tracks = try? await source.tracks(of: item) {
                         model.add(tracks: tracks.map(\.info), tagsKnown: source.tracksHaveTags)
@@ -579,43 +748,110 @@ final class LibraryWindowController: SkinWindowController {
                 }
             })
             if let kept = source.isKeptOffline(item) {
-                menu.addItem(.separator())
-                menu.addItem(NSMenuItem(title: "Keep Offline", checked: kept) { source.setKeptOffline(item, !kept) })
+                toggles.append(NSMenuItem(title: "Keep Offline", checked: kept) { source.setKeptOffline(item, !kept) })
             }
-        case .tracks, .stations:
+            favourites = [item]
+            if kind == .playlists, source.editsPlaylists, playlists[row].editable {
+                let playlist = playlists[row]
+                playlistItems.append(NSMenuItem(title: "Delete Playlist…") { [weak self] in self?.deletePlaylist(playlist) })
+            }
+        case (.tracks, let row?), (.stations, let row?):
             if !(selection[list] ?? []).contains(row) {
                 selection[list] = [row]
                 changed()
             }
-            menu.addItem(NSMenuItem(title: "Play") { [weak self] in
+            play.append(NSMenuItem(title: "Play") { [weak self] in
                 guard let self else { return }
                 self.play(self.chosenTracks, startingAt: 0)
             })
-            menu.addItem(NSMenuItem(title: "Enqueue") { [weak self] in
+            play.append(NSMenuItem(title: "Enqueue") { [weak self] in
                 guard let self else { return }
                 model.add(tracks: self.chosenTracks.map(\.info), tagsKnown: source.tracksHaveTags)
             })
-        case .artists:
-            manager.showMainMenu(for: event, in: window.skinView)
-            return
+            favourites = chosenTracks.map { .track($0.info) }
+        case (.artists, let row?):
+            favourites = [.artist(artists[row])]
+        default:
+            break
         }
-        NSMenu.popUpContextMenu(menu, with: event, for: window.skinView)
+        if let item = NSMenuItem.favourite(for: favourites, in: [source], then: { [weak self] added, error in
+            self?.favouritesChanged(added, error: error, inView: viewIndex)
+        }) {
+            toggles.append(item)
+        }
+        if row != nil, kind == .tracks, let item = NSMenuItem.addToPlaylist(chosenTracks.map(\.info), in: [source], then: { [weak self] in
+            self?.playlistsChanged($0, inView: viewIndex)
+        }) {
+            toggles.append(item)
+        }
+        let menu = NSMenu()
+        for group in [play, toggles, playlistItems] where !group.isEmpty {
+            if !menu.items.isEmpty { menu.addItem(.separator()) }
+            group.forEach(menu.addItem)
+        }
+        return menu.items.isEmpty ? nil : menu
     }
 
-    /// The list and row under a point.
-    private func row(at point: SkinPoint) -> (list: Int, row: Int)? {
-        for list in (0..<upperCount) + [Self.tracksList] where listRect(list).contains(x: point.x, y: point.y) {
-            guard let row = geometry(list).row(atY: point.y, firstVisible: scroll[list] ?? 0), row < rows(for: list).count else { return nil }
-            return (list, row)
+    /// Failures show in the status line; the favourites view lets go of what left it.
+    private func favouritesChanged(_ added: Bool, error: Error?, inView index: Int) {
+        if let error {
+            status = "Favourites not changed: \(error.localizedDescription)"
+            changed()
+        } else if !added, index == viewIndex, view.listsFavourites {
+            loadView()
         }
-        return nil
+    }
+
+    private func deletePlaylist(_ playlist: LibraryPlaylist) {
+        let alert = NSAlert()
+        alert.messageText = "Delete the playlist “\(playlist.name)”?"
+        alert.informativeText = "Its songs stay in the library."
+        alert.addButton(withTitle: "Delete").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let source = self.source, viewIndex = self.viewIndex
+        Task {
+            do {
+                try await source.deletePlaylist(playlist)
+                playlistsChanged(.success(.deleted(playlist.name)), inView: viewIndex)
+            } catch {
+                playlistsChanged(.failure(error), inView: viewIndex)
+            }
+        }
+    }
+
+    /// A playlist made or deleted shows in the playlists view; the rest in the status line.
+    private func playlistsChanged(_ result: Result<PlaylistChange, Error>, inView index: Int) {
+        switch result {
+        case .success(.added(let name)):
+            status = PlaylistChange.added(to: name).message
+        case .success(let change):
+            if index == viewIndex, view.lists == .playlists { loadView() } else { status = change.message }
+        case .failure(let error):
+            status = "Playlist not changed: \(error.localizedDescription)"
+        }
+        changed()
+    }
+
+    /// The list under a point.
+    private func list(at point: SkinPoint) -> Int? {
+        ((0..<upperCount) + [Self.tracksList]).first { listRect($0).contains(x: point.x, y: point.y) }
+    }
+
+    /// The row of a list under a point; nil below the last one.
+    private func row(at point: SkinPoint, in list: Int) -> Int? {
+        guard let row = geometry(list).row(atY: point.y, firstVisible: scroll[list] ?? 0), row < rows(for: list).count else { return nil }
+        return row
     }
 
     /// Self test: what a right click on a row offers.
     func contextMenuTitlesForTesting(list: Int, row: Int) -> [String] {
-        guard kind(of: list) == .albums || kind(of: list) == .playlists else { return [] }
-        let item: LibraryItem = kind(of: list) == .albums ? .album(albums[row]) : .playlist(playlists[row])
-        return ["Play", "Enqueue"] + (source.isKeptOffline(item).map { ["Keep Offline" + ($0 ? " ✓" : "")] } ?? [])
+        contextMenu(list: list, row: row)?.titlesForTesting ?? []
+    }
+
+    /// Self test: a right click on a row, then a choice in its menu (and submenus).
+    func chooseInContextMenuForTesting(_ titles: String..., list: Int, row: Int) {
+        contextMenu(list: list, row: row)?.chooseForTesting(titles)
     }
 
     func setKeptOfflineForTesting(list: Int, row: Int, _ keep: Bool) {
@@ -626,6 +862,18 @@ final class LibraryWindowController: SkinWindowController {
     /// For the self test.
     var summary: String {
         "view=\(view.title) artists=\(artists.count) albums=\(albums.count) playlists=\(playlists.count) songs=\(tracks.count) status=\(statusText)"
+    }
+
+    /// Self test: the middle of a header cell, or the divider after it.
+    func headerPointForTesting(list: Int, column: Int, divider: Bool = false) -> SkinPoint {
+        let g = geometry(list), range = g.columnRanges(columns(for: list), textSize: manager.textSize)[column]
+        return SkinPoint(x: divider ? range.upperBound : (range.lowerBound + range.upperBound) / 2, y: g.header!.y + g.header!.height / 2)
+    }
+
+    func rowsForTesting(list: Int) -> [[String]] { rows(for: list) }
+
+    func columnWidthsForTesting(list: Int) -> [Int] {
+        geometry(list).columnRanges(columns(for: list), textSize: manager.textSize).map(\.count)
     }
 
     func selectForTesting(row: Int, in list: Int) {
@@ -645,5 +893,111 @@ final class LibraryWindowController: SkinWindowController {
         viewIndex = index
         searchResults = nil
         loadView()
+    }
+}
+
+extension NSMenuItem {
+    /// "Favourite": checked when all of `items` are favourites in the libraries
+    /// they are in; choosing it makes them all favourites, or none. nil when
+    /// none of them can be one.
+    @MainActor
+    static func favourite(
+        for items: [LibraryItem], in sources: [LibrarySource], then done: @escaping @MainActor (_ added: Bool, _ error: Error?) -> Void
+    ) -> NSMenuItem? {
+        let involved = sources.filter { source in items.contains { source.isFavourite($0) != nil } }
+        guard !involved.isEmpty else { return nil }
+        let add = involved.contains { source in items.contains { source.isFavourite($0) == false } }
+        return NSMenuItem(title: "Favourite", checked: !add) {
+            let changes = involved.map { $0.setFavourite(items, add) }
+            Task {
+                do {
+                    for change in changes { try await change.value }
+                    done(add, nil)
+                } catch {
+                    done(add, error)
+                }
+            }
+        }
+    }
+}
+
+/// What a playlist menu did, for the window to report.
+enum PlaylistChange {
+    case created(String), added(to: String), deleted(String)
+
+    var message: String {
+        switch self {
+        case .created(let name): "Created playlist “\(name)”"
+        case .added(let name): "Added to playlist “\(name)”"
+        case .deleted(let name): "Deleted playlist “\(name)”"
+        }
+    }
+}
+
+extension NSMenuItem {
+    /// "Add to Playlist": for each library some of `tracks` belong to, a new
+    /// playlist and the ones it has. nil when no library can take them.
+    @MainActor
+    static func addToPlaylist(
+        _ tracks: [TrackInfo], in sources: [LibrarySource], then done: @escaping @MainActor (Result<PlaylistChange, Error>) -> Void
+    ) -> NSMenuItem? {
+        let involved = sources.filter { $0.editsPlaylists && tracks.contains(where: $0.canAddToPlaylist) }
+        guard !involved.isEmpty else { return nil }
+        let menu = NSMenu()
+        for source in involved {
+            let own = tracks.filter(source.canAddToPlaylist)
+            if involved.count > 1 {
+                if !menu.items.isEmpty { menu.addItem(.separator()) }
+                menu.addItem(.sectionHeader(title: source.windowTitle))
+            }
+            menu.addItem(newPlaylist(in: source, with: own, then: done))
+            for playlist in source.editablePlaylists {
+                menu.addItem(NSMenuItem(title: playlist.name) {
+                    Task {
+                        do {
+                            try await source.add(own, to: playlist)
+                            done(.success(.added(to: playlist.name)))
+                        } catch {
+                            done(.failure(error))
+                        }
+                    }
+                })
+            }
+        }
+        let item = NSMenuItem(title: "Add to Playlist", action: nil, keyEquivalent: "")
+        item.submenu = menu
+        return item
+    }
+
+    /// "New Playlist…": asks for a name, then makes it with `tracks`.
+    @MainActor
+    static func newPlaylist(
+        in source: LibrarySource, with tracks: [TrackInfo], then done: @escaping @MainActor (Result<PlaylistChange, Error>) -> Void
+    ) -> NSMenuItem {
+        NSMenuItem(title: "New Playlist…") {
+            guard let name = WindowManager.askForText(title: "New Playlist", message: "A name for the playlist in \(source.windowTitle):", button: "Create")
+            else { return }
+            Task {
+                do {
+                    try await source.createPlaylist(named: name, with: tracks)
+                    done(.success(.created(name)))
+                } catch {
+                    done(.failure(error))
+                }
+            }
+        }
+    }
+}
+
+extension NSMenu {
+    /// Self test: the items, checked ones marked.
+    var titlesForTesting: [String] {
+        items.filter { !$0.isSeparatorItem }.map { $0.title + ($0.state == .on ? " ✓" : "") }
+    }
+
+    /// Self test: chooses an item as if clicked, following submenus by title.
+    func chooseForTesting(_ titles: [String]) {
+        guard let title = titles.first, let index = items.firstIndex(where: { $0.title == title }) else { return }
+        if let submenu = items[index].submenu { submenu.chooseForTesting(Array(titles.dropFirst())) } else { performActionForItem(at: index) }
     }
 }

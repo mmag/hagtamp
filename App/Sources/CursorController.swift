@@ -8,6 +8,7 @@ final class CursorController {
     private var cursors: [SkinCursorName: SkinCursor] = [:]
     private var cache: [SkinCursorName: [NSCursor]] = [:]
     private var current: SkinCursorName?
+    private var system: NSCursor?
     private var frameIndex = 0
     private var timer: Timer?
 
@@ -21,8 +22,9 @@ final class CursorController {
 
     /// Shows a skin cursor, or the arrow for nil / cursors the skin lacks.
     func show(_ name: SkinCursorName?) {
-        guard name != current else { return }
+        guard name != current || system != nil else { return }
         current = name
+        system = nil
         timer?.invalidate()
         timer = nil
         frameIndex = 0
@@ -32,6 +34,16 @@ final class CursorController {
         }
         frames[cursor.sequence[0]].set()
         if cursor.isAnimated { scheduleNextFrame(cursor) }
+    }
+
+    /// A system cursor, until a skin cursor is shown again.
+    func show(system cursor: NSCursor) {
+        guard cursor != system else { return }
+        timer?.invalidate()
+        timer = nil
+        current = nil
+        system = cursor
+        cursor.set()
     }
 
     private func scheduleNextFrame(_ cursor: SkinCursor) {

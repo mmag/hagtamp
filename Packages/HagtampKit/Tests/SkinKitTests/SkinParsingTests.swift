@@ -132,6 +132,8 @@ import Testing
         #expect(SkinFont.sprite(for: "é") == SkinFont.sprite(for: "E"))
         #expect(SkinFont.sprite(for: "Ö").rect.y == 12)
         #expect(SkinFont.sprite(for: "~") == SkinFont.sprite(for: " "))
+        #expect(SkinFont.sprite(for: "“") == SkinFont.sprite(for: "\""))
+        #expect(SkinFont.sprite(for: "’") == SkinFont.sprite(for: "'"))
         #expect(SkinFont.sprite(for: "3").rect == PixelRect(x: 15, y: 6, width: 5, height: 6))
     }
 }
