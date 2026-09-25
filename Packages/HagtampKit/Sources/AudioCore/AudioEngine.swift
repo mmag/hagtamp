@@ -129,8 +129,8 @@ public final class AudioEngine {
     public var nowPlayingURL: URL? { player.nowPlaying?.inputSource.url }
 
     /// Seconds into the current track.
-    public var currentTime: Double? { player.currentTime }
-    public var totalTime: Double? { player.totalTime }
+    public var currentTime: Double? { player.currentTime.flatMap { $0.isFinite ? $0 : nil } }
+    public var totalTime: Double? { player.totalTime.flatMap { $0.isFinite ? $0 : nil } }
 
     @discardableResult
     public func seek(to fraction: Double) -> Bool {
@@ -240,6 +240,11 @@ final class ProcessingGraph: NSObject, AudioPlayer.Delegate, @unchecked Sendable
     }
 
     func audioPlayer(_ audioPlayer: AudioPlayer, encounteredError error: any Error) {
+        onEvent?(.error(error.localizedDescription))
+    }
+
+    /// A decoder that fails to open or decode (a damaged or unsupported file).
+    func audioPlayer(_ audioPlayer: AudioPlayer, decodingAborted decoder: any PCMDecoding, error: any Error, framesRendered: AVAudioFramePosition) {
         onEvent?(.error(error.localizedDescription))
     }
 }

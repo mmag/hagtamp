@@ -211,9 +211,18 @@ extension Bitmap {
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
     }
 
-    /// Decodes any image CoreGraphics understands. Returns nil for empty images.
+    /// Skin images are small (the largest of 300 museum skins is 819x586):
+    /// anything far bigger is refused rather than allocated.
+    public static let maxSide = 4096
+    public static let maxPixels = 4 << 20
+
+    public static func allowsSize(width: Int, height: Int) -> Bool {
+        width <= maxSide && height <= maxSide && width * height <= maxPixels
+    }
+
+    /// Decodes any image CoreGraphics understands. Returns nil for empty or oversized images.
     public init?(cgImage: CGImage) {
-        guard cgImage.width > 0, cgImage.height > 0 else { return nil }
+        guard cgImage.width > 0, cgImage.height > 0, Self.allowsSize(width: cgImage.width, height: cgImage.height) else { return nil }
         var bitmap = Bitmap(width: cgImage.width, height: cgImage.height)
         bitmap.withCGContext { ctx in
             ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
@@ -246,8 +255,12 @@ extension Bitmap {
     }
 
     public init?(imageData data: Data) {
+        // The header's size is checked before anything is decoded.
         guard
             let source = CGImageSourceCreateWithData(data as CFData, nil),
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+            let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int,
+            Self.allowsSize(width: width, height: height),
             let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { return nil }
         self.init(cgImage: image)

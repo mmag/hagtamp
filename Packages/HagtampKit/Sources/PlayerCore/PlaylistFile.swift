@@ -97,6 +97,8 @@ public enum PlaylistFile {
         func location(_ url: URL) -> String {
             guard url.isFileURL else { return url.absoluteString }
             let path = url.standardizedFileURL.path
+            // A path with a line break in it goes as a percent-encoded file URL.
+            guard singleLine(path) == path else { return url.absoluteString }
             return path.hasPrefix(basePath) ? String(path.dropFirst(basePath.count)) : path
         }
         var text: String
@@ -104,18 +106,30 @@ public enum PlaylistFile {
         case .m3u8:
             text = "#EXTM3U\n"
             for track in tracks {
-                text += "#EXTINF:\(track.duration.map { Int($0.rounded()) } ?? -1),\(track.displayName)\n"
+                text += "#EXTINF:\(track.duration.map { Int($0.rounded()) } ?? -1),\(singleLine(track.displayName))\n"
                 text += location(track.url) + "\n"
             }
         case .pls:
             text = "[playlist]\n"
             for (i, track) in tracks.enumerated() {
                 text += "File\(i + 1)=\(location(track.url))\n"
-                text += "Title\(i + 1)=\(track.displayName)\n"
+                text += "Title\(i + 1)=\(singleLine(track.displayName))\n"
                 text += "Length\(i + 1)=\(track.duration.map { Int($0.rounded()) } ?? -1)\n"
             }
             text += "NumberOfEntries=\(tracks.count)\nVersion=2\n"
         }
         return Data(text.utf8)
+    }
+
+    /// Titles are one line each: line breaks (U+0085 from old Latin-1 tags
+    /// included) and other control characters become spaces.
+    static func singleLine(_ text: String) -> String {
+        let scalars = text.unicodeScalars.map { scalar -> Unicode.Scalar in
+            switch scalar.properties.generalCategory {
+            case .control, .lineSeparator, .paragraphSeparator: " "
+            default: scalar
+            }
+        }
+        return String(String.UnicodeScalarView(scalars))
     }
 }

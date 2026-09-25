@@ -101,7 +101,9 @@ enum CursorDecoder {
         var rates: [Int] = []
         var sequence: [Int] = []
 
-        func walk(_ start: Int, _ end: Int) {
+        /// Frames kept: real animated cursors have a dozen or so.
+        let maxFrames = 32
+        func walk(_ start: Int, _ end: Int, depth: Int = 0) {
             var at = start
             while at + 8 <= end {
                 let id = tag(at), size = u32(at + 4), body = at + 8
@@ -115,8 +117,9 @@ enum CursorDecoder {
                 case "seq ":
                     sequence = stride(from: body, to: bodyEnd - 3, by: 4).map(u32)
                 case "LIST":
-                    if tag(body) == "fram" { walk(body + 4, bodyEnd) }
-                case "icon":
+                    // Frames sit one list deep; a file nesting lists thousands deep would exhaust the stack.
+                    if tag(body) == "fram", depth < 2 { walk(body + 4, bodyEnd, depth: depth + 1) }
+                case "icon" where frames.count < maxFrames && body < bodyEnd:
                     if let frame = decodeCUR(Data(bytes[body..<bodyEnd])) { frames.append(frame) }
                 default:
                     break

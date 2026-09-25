@@ -140,11 +140,32 @@ indirect enum EELNode: Equatable {
 }
 
 struct EELParser {
+    /// Deeper code is refused: it is compiled and run recursively. Nesting
+    /// (brackets, signs, calls) also costs the parser's own recursion, a
+    /// dozen frames a level, so it has a tighter limit.
+    static let maxDepth = 400
+    static let maxNesting = 64
+
     let tokens: [EELToken]
     var index = 0
+    private var nesting = 0
 
     init(tokens: [EELToken]) {
         self.tokens = tokens
+    }
+
+    /// A node and how deep its tree goes.
+    struct Parsed {
+        var node: EELNode
+        var depth: Int
+    }
+
+    private static let tooDeep = EELError(message: "Code nested too deeply")
+
+    private func node(_ node: EELNode, _ children: [Parsed]) throws -> Parsed {
+        let depth = 1 + (children.map(\.depth).max() ?? 0)
+        guard depth <= Self.maxDepth else { throw Self.tooDeep }
+        return Parsed(node: node, depth: depth)
     }
 
     private var current: EELToken? { index < tokens.count ? tokens[index] : nil }
@@ -163,7 +184,7 @@ struct EELParser {
 
     /// Statements; nil for nothing but separators.
     mutating func program() throws -> EELNode? {
-        var statements: [EELNode] = []
+        var statements: [Parsed] = []
         while current != nil {
             if accept(";") { continue }
             statements.append(try expression())
@@ -171,15 +192,20 @@ struct EELParser {
                 throw EELError(message: "Expected “;” between statements")
             }
         }
-        return statements.isEmpty ? nil : statements.count == 1 ? statements[0] : .sequence(statements)
+        if statements.isEmpty { return nil }
+        return statements.count == 1 ? statements[0].node : try node(.sequence(statements.map(\.node)), statements).node
     }
 
-    mutating func expression() throws -> EELNode {
+    mutating func expression() throws -> Parsed {
+        nesting += 1
+        defer { nesting -= 1 }
+        guard nesting <= Self.maxNesting else { throw Self.tooDeep }
         let left = try ternary()
         for op in ["=", "+=", "-=", "*=", "/=", "%="] where accept(op) {
-            switch left {
+            switch left.node {
             case .variable, .call("megabuf", _), .call("gmegabuf", _):
-                return .assign(target: left, op: op, value: try expression())
+                let value = try expression()
+                return try node(.assign(target: left.node, op: op, value: value.node), [left, value])
             default:
                 throw EELError(message: "Can't assign to that")
             }
@@ -187,69 +213,84 @@ struct EELParser {
         return left
     }
 
-    mutating func ternary() throws -> EELNode {
+    mutating func ternary() throws -> Parsed {
         let condition = try binary(0)
         guard accept("?") else { return condition }
         let yes = try expression()
         try expect(":")
-        return .ternary(condition, yes, try expression())
+        let no = try expression()
+        return try node(.ternary(condition.node, yes.node, no.node), [condition, yes, no])
     }
 
     /// Precedence climbing, loosest first.
     static let levels: [[String]] = [["||"], ["&&"], ["|"], ["&"], ["==", "!="], ["<", ">", "<=", ">="], ["+", "-"], ["*", "/", "%"]]
 
-    mutating func binary(_ level: Int) throws -> EELNode {
+    mutating func binary(_ level: Int) throws -> Parsed {
         guard level < Self.levels.count else { return try unary() }
         var left = try binary(level + 1)
         while let op = Self.levels[level].first(where: { current == .op($0) }) {
             index += 1
-            left = .binary(op, left, try binary(level + 1))
+            let right = try binary(level + 1)
+            left = try node(.binary(op, left.node, right.node), [left, right])
         }
         return left
     }
 
-    mutating func unary() throws -> EELNode {
+    mutating func unary() throws -> Parsed {
+        nesting += 1
+        defer { nesting -= 1 }
+        guard nesting <= Self.maxNesting else { throw Self.tooDeep }
         for op in ["-", "+", "!"] where accept(op) {
-            return .unary(op, try unary())
+            let operand = try unary()
+            return try node(.unary(op, operand.node), [operand])
         }
         let base = try primary()
-        if accept("^") { return .binary("^", base, try unary()) }
+        if accept("^") {
+            let exponent = try unary()
+            return try node(.binary("^", base.node, exponent.node), [base, exponent])
+        }
         return base
     }
 
-    mutating func primary() throws -> EELNode {
+    mutating func primary() throws -> Parsed {
         switch current {
         case .number(let value)?:
             index += 1
-            return .number(value)
+            return Parsed(node: .number(value), depth: 1)
         case .name(let name)?:
             index += 1
-            guard accept("(") else { return .variable(name) }
-            var arguments: [EELNode] = []
+            guard accept("(") else { return Parsed(node: .variable(name), depth: 1) }
+            var arguments: [Parsed] = []
             if !accept(")") {
                 repeat { arguments.append(try sequenceOrExpression(until: [",", ")"])) } while accept(",")
                 try expect(")")
             }
-            return .call(name, arguments)
+            return try node(.call(name, arguments.map(\.node)), arguments)
         case .op("(")?:
             index += 1
-            let node = try sequenceOrExpression(until: [")"])
+            let inner = try sequenceOrExpression(until: [")"])
             try expect(")")
-            return node
+            return inner
         default:
             throw EELError(message: current == nil ? "Unexpected end of code" : "Unexpected “\(current!)”")
         }
     }
 
     /// "(a; b; c)" is a sequence worth its last value (also inside call arguments).
-    mutating func sequenceOrExpression(until closers: [String]) throws -> EELNode {
+    mutating func sequenceOrExpression(until closers: [String]) throws -> Parsed {
         var items = [try expression()]
         while accept(";") {
             if let current, closers.contains(where: { current == .op($0) }) { break }
             items.append(try expression())
         }
-        return items.count == 1 ? items[0] : .sequence(items)
+        return items.count == 1 ? items[0] : try node(.sequence(items.map(\.node)), items)
     }
+}
+
+/// Double to Int for values from presets, which may be anything: NaN is 0
+/// and the rest is clamped well inside Int's range (`Int(_:)` traps on both).
+func saturatingInt(_ value: Double) -> Int {
+    value.isNaN ? 0 : Int(max(-1e15, min(1e15, value)))
 }
 
 // MARK: - Compiler
@@ -319,7 +360,7 @@ struct EELCompiler {
             let index = compile(arguments[0])
             let global = buffer == "gmegabuf"
             return { vars in
-                let i = Int(index(vars) + Self.epsilon)
+                let i = saturatingInt(index(vars) + Self.epsilon)
                 guard i >= 0, i < 8_388_608 else { return 0 }
                 let new = value(vars)
                 if global {
@@ -337,9 +378,9 @@ struct EELCompiler {
     }
 
     static func modulo(_ a: Double, _ b: Double) -> Double {
-        let d = Int(abs(b))
+        let d = saturatingInt(abs(b))
         guard d != 0 else { return 0 }
-        return Double(Int(abs(a)) % d)
+        return Double(saturatingInt(abs(a)) % d)
     }
 
     private func binary(_ op: String, _ a: @escaping Eval, _ b: @escaping Eval) -> Eval {
@@ -362,8 +403,8 @@ struct EELCompiler {
         case ">=": return { a($0) >= b($0) ? 1 : 0 }
         case "&&": return { abs(a($0)) >= Self.epsilon && abs(b($0)) >= Self.epsilon ? 1 : 0 }
         case "||": return { abs(a($0)) >= Self.epsilon || abs(b($0)) >= Self.epsilon ? 1 : 0 }
-        case "&": return { Double(Int(a($0)) & Int(b($0))) }
-        case "|": return { Double(Int(a($0)) | Int(b($0))) }
+        case "&": return { Double(saturatingInt(a($0)) & saturatingInt(b($0))) }
+        case "|": return { Double(saturatingInt(a($0)) | saturatingInt(b($0))) }
         default: return { _ in 0 }
         }
     }
@@ -428,13 +469,13 @@ struct EELCompiler {
         case "megabuf", "gmegabuf":
             let global = name == "gmegabuf"
             return { vars in
-                let i = Int(a(vars) + Self.epsilon)
+                let i = saturatingInt(a(vars) + Self.epsilon)
                 let cells = global ? vars.global.cells : vars.megabuf
                 return i >= 0 && i < cells.count ? cells[i] : 0
             }
         case "loop":
             return { vars in
-                let count = min(Int(a(vars)), Self.maxIterations)
+                let count = min(saturatingInt(a(vars)), Self.maxIterations)
                 var last = 0.0
                 if count > 0 { for _ in 0..<count { last = b(vars) } }
                 return last

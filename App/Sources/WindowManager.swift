@@ -77,6 +77,7 @@ final class WindowManager: NSObject {
         super.init()
         cursors.load(skin)
         model.onChange = { [weak self] in self?.playerChanged() }
+        model.onError = { [weak self] message in self?.showMessage(message) }
         if let data = Storage.defaults.data(forKey: "visualizer"),
             let saved = try? JSONDecoder().decode(VisualizerSettings.self, from: data)
         {
@@ -521,6 +522,16 @@ final class WindowManager: NSObject {
         render()
     }
     #endif
+
+    /// A message in the marquee for a few seconds (a track that won't play, a preset's name).
+    func showMessage(_ text: String, seconds: Double = 4) {
+        let text = text.uppercased()
+        marqueeMessage = text
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            if self?.marqueeMessage == text { self?.marqueeMessage = nil }
+        }
+    }
 
     /// Temporary text while a slider is dragged ("Volume: 78%").
     var marqueeMessage: String? {

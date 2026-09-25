@@ -175,7 +175,7 @@ final class PreferencesModel {
 
     func clearCache() {
         Task {
-            await navidrome.audioCache.clear()
+            await navidrome.clearCache()
             refreshUsage()
         }
     }

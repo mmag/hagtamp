@@ -75,6 +75,27 @@ import Testing
         #expect(abs(uv(second, 8, 3).y - 0.4) < 1e-6 && abs(uv(second, 0, 3).y - 0.5) < 1e-6)
     }
 
+    /// Presets are files from anywhere: impossible values don't bring the app down.
+    @Test func impossibleValuesDontCrash() {
+        let (_, f) = frame("""
+            nWaveMode=nan
+            zoom=inf
+            fWaveAlpha=1
+            nVideoEchoOrientation=1e300
+            per_frame_1=wave_mode = 1e300; echo_orient = 0/0; mv_x = 1e300; mv_y = -1e300; mv_a = 1;
+            wavecode_0_enabled=1
+            wavecode_0_samples=1e300
+            wavecode_0_sep=-1e300
+            wave_0_per_frame1=samples = 1e300; sep = 1e300;
+            shapecode_0_enabled=1
+            shapecode_0_num_inst=1e300
+            shape_0_per_frame1=sides = 0/0;
+            """)
+        #expect(f.warp.allSatisfy { $0.x.isFinite && $0.y.isFinite })
+        #expect(f.shapes.count == 1024 && f.shapes.allSatisfy { $0.sides == 3 })
+        #expect(MilkdropPreset.parse("zoom=inf\nrot=nan\nwarp=2", name: "Test").value("zoom", 1) == 1)
+    }
+
     @Test func brokenBlocksAreSkipped() {
         let (engine, f) = frame("per_frame_1=zoom = (1 +\nper_pixel_1=rot = 0.1;")
         #expect(engine.errors.count == 1 && engine.errors[0].hasPrefix("per-frame"))

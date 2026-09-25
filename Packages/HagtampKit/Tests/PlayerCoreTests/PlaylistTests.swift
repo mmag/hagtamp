@@ -137,4 +137,31 @@ import Testing
             #expect(back[0].displayName == "X - A" && back[0].duration == 61)
         }
     }
+
+    /// Lengths from files can be anything; only real ones are kept (others used to crash on save).
+    @Test func impossibleLengthsAreDropped() {
+        let m3u = "#EXTINF:inf,Station\nhttp://a.test/stream\n#EXTINF:1e999,Loop\nb.mp3\n#EXTINF:nan,C\nc.mp3\n"
+        #expect(PlaylistFile.parse(Data(m3u.utf8), base: base).map(\.duration) == [nil, nil, nil])
+        let pls = "[playlist]\nFile1=a.mp3\nLength1=1e999\nFile2=b.mp3\nLength2=-inf\n"
+        #expect(PlaylistFile.parse(Data(pls.utf8), base: base).map(\.duration) == [nil, nil])
+        var info = TrackInfo(url: base)
+        info.duration = .infinity
+        #expect(info.duration == nil)
+        let data = PlaylistFile.data(for: [TrackInfo(url: base, duration: .infinity)], format: .m3u8, base: base)
+        #expect(String(decoding: data, as: UTF8.self).contains("#EXTINF:-1,"))
+    }
+
+    /// A line break in a title or path (U+0085 comes from old Latin-1 tags) stays inside its entry.
+    @Test func lineBreaksStayInsideAnEntry() {
+        let tracks = [
+            TrackInfo(url: URL(fileURLWithPath: "/music/lists/a.mp3"), title: "Wait\u{85}For Me", artist: "X\nY"),
+            TrackInfo(url: URL(fileURLWithPath: "/music/lists/odd\nname.mp3"), title: "B"),
+            TrackInfo(url: URL(fileURLWithPath: "/music/lists/c.mp3"), title: "C\u{2028}D\r\nFile9=/etc/passwd"),
+        ]
+        for format in [PlaylistFile.Format.m3u8, .pls] {
+            let back = PlaylistFile.parse(PlaylistFile.data(for: tracks, format: format, base: base), base: base)
+            #expect(back.map(\.url.path) == tracks.map(\.url.path))
+            #expect(back.map(\.displayName) == ["X Y - Wait For Me", "B", "C D  File9=/etc/passwd"])
+        }
+    }
 }

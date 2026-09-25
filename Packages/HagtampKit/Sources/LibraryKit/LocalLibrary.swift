@@ -93,9 +93,14 @@ public actor LocalLibrary {
         guard generation == scanGeneration else { return }
 
         // Files that are gone leave now; changed ones keep their old tags until reread.
+        // A folder that isn't there at all (a disk not mounted) keeps its files.
         let foundPaths = Set(found.map(\.url.path))
-        let removed = entries.keys.contains { !foundPaths.contains($0) }
-        entries = entries.filter { foundPaths.contains($0.key) }
+        let unreachable = folders.filter { !FileManager.default.fileExists(atPath: $0.path) }
+        func stays(_ entry: (key: String, value: LibraryEntry)) -> Bool {
+            foundPaths.contains(entry.key) || (!unreachable.isEmpty && Self.isInside(entry.value.url, unreachable))
+        }
+        let removed = entries.contains { !stays($0) }
+        entries = entries.filter(stays)
         let firstImport = entries.isEmpty
         let toRead: [(file: FoundFile, added: Date)] = found.compactMap { file in
             let old = entries[file.url.path]
@@ -158,12 +163,23 @@ public actor LocalLibrary {
     /// The enumerator may report files with symlinks resolved (/var is /private/var).
     static func isInside(_ url: URL, _ folders: [URL]) -> Bool {
         folders.contains { folder in
-            let resolved = realpath(folder.path, nil).map { pointer in
-                defer { free(pointer) }
-                return String(cString: pointer)
-            }
-            return [folder.path, resolved].compactMap { $0 }.contains { url.path.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }
+            [folder.path, resolved(folder.path)].contains { url.path.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }
         }
+    }
+
+    /// A path with symlinks resolved, also for a folder that isn't there
+    /// (its nearest existing parent is resolved).
+    static func resolved(_ path: String) -> String {
+        var head = path, tail: [String] = []
+        while !head.isEmpty, head != "/" {
+            if let pointer = realpath(head, nil) {
+                defer { free(pointer) }
+                return ([String(cString: pointer)] + tail).joined(separator: "/")
+            }
+            tail.insert((head as NSString).lastPathComponent, at: 0)
+            head = (head as NSString).deletingLastPathComponent
+        }
+        return path
     }
 
     // MARK: - Index

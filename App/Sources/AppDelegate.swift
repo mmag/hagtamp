@@ -38,11 +38,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Skins
 
-    /// Puts a skin on; remembered skins are installed in the Skins folder first.
+    /// Puts a skin on; remembered skins are installed in the Skins folder once
+    /// they have loaded (a folder must look like a skin: one with MAIN.BMP).
     func loadSkin(from url: URL, remember: Bool = true) {
-        let url = remember ? SkinLibrary.install(url) : url
         do {
-            windows.setSkin(try Skin.load(contentsOf: url))
+            let skin = try SkinLibrary.load(url)
+            let url = remember ? SkinLibrary.install(url) : url
+            windows.setSkin(skin)
             if remember { Storage.defaults.set(url.path, forKey: SkinLibrary.lastSkinKey) }
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
         } catch {

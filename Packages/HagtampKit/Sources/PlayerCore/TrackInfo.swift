@@ -6,8 +6,11 @@ public struct TrackInfo: Sendable, Equatable, Codable {
     public var title: String?
     public var artist: String?
     public var album: String?
-    /// Seconds.
-    public var duration: Double?
+    /// Seconds: finite and under about four months, or nil (playlist files
+    /// and tags can say anything, "inf" included).
+    public var duration: Double? {
+        didSet { duration = Self.validDuration(duration) }
+    }
     /// kbit/s.
     public var bitrate: Int?
     /// Hz.
@@ -18,7 +21,11 @@ public struct TrackInfo: Sendable, Equatable, Codable {
         self.url = url
         self.title = title
         self.artist = artist
-        self.duration = duration
+        self.duration = Self.validDuration(duration)
+    }
+
+    static func validDuration(_ seconds: Double?) -> Double? {
+        seconds.flatMap { $0.isFinite && $0 >= 0 && $0 < 10_000_000 ? $0 : nil }
     }
 
     /// Winamp's default title format: "Artist - Title", else the file name.

@@ -55,7 +55,7 @@ public struct MilkdropPreset: Sendable {
                 // Shader lines start with a backtick.
                 let text = block.hasPrefix("warp") || block.hasPrefix("comp") ? String(value.drop { $0 == "`" }) : value
                 code[block, default: []].append((number, text))
-            } else if let number = Double(value.trimmingCharacters(in: .whitespaces)) {
+            } else if let number = Double(value.trimmingCharacters(in: .whitespaces)), number.isFinite {
                 preset.store(key, number)
             }
         }

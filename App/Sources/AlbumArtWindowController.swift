@@ -14,8 +14,12 @@ final class AlbumArtWindowController: SkinWindowController {
     private let imageView = PassthroughImageView()
     private var shownTrack: URL?
     private var resizeStart: (mouse: NSPoint, width: Int, height: Int)?
-    /// Covers by track, so moving within an album doesn't hit the disk again.
-    private var cache: [URL: NSImage] = [:]
+    /// Recent covers by track, so moving within an album doesn't hit the disk again.
+    private let cache: NSCache<NSURL, NSImage> = {
+        let cache = NSCache<NSURL, NSImage>()
+        cache.countLimit = 16
+        return cache
+    }()
 
     init(manager: WindowManager) {
         super.init(id: .albumArt, manager: manager)
@@ -62,7 +66,7 @@ final class AlbumArtWindowController: SkinWindowController {
             imageView.image = nil
             return
         }
-        if let cached = cache[track] {
+        if let cached = cache.object(forKey: track as NSURL) {
             imageView.image = cached
             return
         }
@@ -74,7 +78,7 @@ final class AlbumArtWindowController: SkinWindowController {
     }
 
     private func show(_ image: NSImage?, for track: URL) {
-        if let image { cache[track] = image }
+        if let image { cache.setObject(image, forKey: track as NSURL) }
         if shownTrack == track { imageView.image = image }
     }
 

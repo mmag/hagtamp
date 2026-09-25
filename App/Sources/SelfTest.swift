@@ -254,14 +254,34 @@ enum SelfTest {
         let model = manager.model, vis = manager.visualization
         if let tone = makeTone(frequency: 330, name: "visualization", seconds: 8) { model.load([tone], play: true) }
         manager.toggleVisualization()
+        vis.window.orderFrontRegardless()  // a window covered by others isn't drawn
         await wait("visualization draws", seconds: 6) { vis.framesDrawn > 30 && vis.currentPresetName != nil }
-        print("selftest: visualization preset=\(vis.currentPresetName ?? "-") frames=\(vis.framesDrawn) presets=\(vis.library.presets.count)")
+        print("selftest: visualization preset=\(vis.currentPresetName ?? "-") frames=\(vis.framesDrawn) presets=\(vis.library.presets.count) uncovered=\(vis.window.occlusionState.contains(.visible)) frame=\(vis.window.frame)")
         await wait("visualization reaches the window", seconds: 5) { (vis.onScreenBrightnessForTesting() ?? 0) > 1 }
         print("selftest: visualization on screen brightness=\(vis.onScreenBrightnessForTesting().map { String(format: "%.1f", $0) } ?? "-")")
         let counted = vis.framesDrawn
         try? await Task.sleep(for: .seconds(2))
         let fps = Double(vis.framesDrawn - counted) / 2
-        print("selftest: visualization at 60 fps: \(fps >= 55 ? "ok" : "SLOW") (\(String(format: "%.1f", fps)))")
+        if vis.window.occlusionState.contains(.visible) {
+            print("selftest: visualization at 60 fps: \(fps >= 55 ? "ok" : "SLOW") (\(String(format: "%.1f", fps)))")
+        } else {
+            print("selftest: visualization at 60 fps: skipped, the window is covered (drawing paused, \(String(format: "%.1f", fps)) fps)")
+        }
+        // Covered entirely by another window it pauses; uncovered it goes on.
+        let cover = NSWindow(contentRect: vis.window.frame.insetBy(dx: -20, dy: -20), styleMask: .borderless, backing: .buffered, defer: false)
+        cover.backgroundColor = .black
+        cover.isOpaque = true
+        cover.isReleasedWhenClosed = false
+        cover.level = .floating
+        cover.orderFrontRegardless()
+        await wait("visualization pauses when covered", seconds: 3) { !vis.window.occlusionState.contains(.visible) }
+        try? await Task.sleep(for: .milliseconds(300))
+        let whileCovered = vis.framesDrawn
+        try? await Task.sleep(for: .seconds(1))
+        print("selftest: visualization paused while covered: \(vis.framesDrawn - whileCovered <= 2 ? "ok" : "NO (\(vis.framesDrawn - whileCovered) frames)")")
+        cover.orderOut(nil)
+        let uncovered = vis.framesDrawn
+        await wait("visualization resumes when uncovered", seconds: 3) { vis.framesDrawn > uncovered + 30 }
         vis.toggleFullScreen()
         try? await Task.sleep(for: .milliseconds(300))
         let screen = vis.window.screen?.frame.size ?? .zero

@@ -147,6 +147,74 @@ private func fixture(_ name: String) throws -> Data {
         #expect(await cache.offlineUsage() == 0)
     }
 
+    /// A server's error (JSON) or a proxy's login page (HTML) fails the download
+    /// with the server's words, and nothing lands in the cache.
+    @Test func messagesInsteadOfAudioAreNotCached() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-cache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let cache = AudioCache(directory: folder.appendingPathComponent("Audio"), limit: 10_000_000)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let json = folder.appendingPathComponent("error.json")
+        try Data(#"{"subsonic-response":{"status":"failed","version":"1.16.1","error":{"code":40,"message":"Wrong username or password"}}}"#.utf8).write(to: json)
+        let html = folder.appendingPathComponent("login.html")
+        try Data("<html><body>Sign in</body></html>".utf8).write(to: html)
+        for (source, code) in [(json, 40), (html, -1)] {
+            let stream = await cache.stream(source, key: source.lastPathComponent, fileExtension: "mp3")
+            do {
+                try await stream.completion()
+                Issue.record("\(source.lastPathComponent) should have failed")
+            } catch let error as NavidromeError {
+                #expect(error.code == code)
+            }
+        }
+        #expect(await cache.usage() == 0)
+    }
+
+    /// Error messages kept as songs by earlier versions are swept out; real audio stays.
+    @Test func sweepsOutMessagesKeptAsSongs() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-cache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let cacheFolder = folder.appendingPathComponent("Audio"), offlineFolder = folder.appendingPathComponent("Offline")
+        let cache = AudioCache(directory: cacheFolder, offlineDirectory: offlineFolder, limit: 10_000_000)
+        try Data(#"{"subsonic-response":{"status":"failed"}}"#.utf8).write(to: cacheFolder.appendingPathComponent("a.mp3"))
+        try Data("\n <html>".utf8).write(to: offlineFolder.appendingPathComponent("b.flac"))
+        try Data("ID3\u{3}".utf8 + Data(count: 100)).write(to: cacheFolder.appendingPathComponent("c.mp3"))
+        try Data("fLaC".utf8 + Data(count: 100)).write(to: offlineFolder.appendingPathComponent("d.flac"))
+        await cache.removeInvalidFiles()
+        let left = (try FileManager.default.contentsOfDirectory(atPath: cacheFolder.path) + FileManager.default.contentsOfDirectory(atPath: offlineFolder.path)).sorted()
+        #expect(left == ["c.mp3", "d.flac"])
+    }
+
+    /// Clearing the cache (or trimming it) leaves the files just handed to the player.
+    @Test func filesInUseSurviveClearing() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-cache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let cache = AudioCache(directory: folder.appendingPathComponent("Audio"), limit: 10_000_000)
+        for key in ["playing", "other"] {
+            let source = folder.appendingPathComponent("src-\(key)")
+            try Data(repeating: 1, count: 1000).write(to: source)
+            _ = try await cache.fetch(source, key: key, fileExtension: "mp3")
+        }
+        cache.markUsed(try #require(cache.peek("playing")))
+        await cache.clear()
+        #expect(cache.peek("playing") != nil && cache.peek("other") == nil)
+        await cache.setLimit(0)
+        #expect(cache.peek("playing") != nil)
+    }
+
+    @Test func filesFollowANewServerAddressAndExtensionsAreSafe() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-cache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let cache = AudioCache(directory: folder.appendingPathComponent("Audio"), offlineDirectory: folder.appendingPathComponent("Offline"), limit: 10_000_000)
+        let source = folder.appendingPathComponent("src")
+        try Data(repeating: 1, count: 1000).write(to: source)
+        _ = try await cache.fetch(source, key: "me@old-1-song-original", fileExtension: "../../Evil")
+        #expect(cache.peek("me@old-1-song-original")?.lastPathComponent == "me_old-1-song-original.evil")
+        await cache.renameFiles(prefix: "me@old-1-", to: "me@new-")
+        #expect(cache.peek("me@old-1-song-original") == nil && cache.peek("me@new-song-original") != nil)
+        #expect(AudioCache.safeExtension("") == "audio" && AudioCache.safeExtension("FLAC") == "flac")
+    }
+
     @Test func failedStreamsLeaveNothingBehind() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-cache-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -226,14 +294,33 @@ private func fixture(_ name: String) throws -> Data {
         let cache = AudioCache(directory: folder, limit: 100_000_000)
         let url = client.streamURL(songID: song.id, format: "mp3", maxBitRate: 128)
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        #expect(query.contains(URLQueryItem(name: "estimateContentLength", value: "true")))
+        // Navidrome's estimated length runs over what it sends, which failed the download.
+        #expect(!query.contains { $0.name == "estimateContentLength" })
         let stream = await cache.stream(url, key: "\(song.id)-mp3", fileExtension: "mp3")
         try await stream.completion()
-        #expect(stream.state.expectedLength > 0)  // announced up front, so decoders know the size
         let file = stream.url
         let size = try #require(try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int)
         #expect(size > 100_000)
         #expect(await cache.file(for: "\(song.id)-mp3") == file)
+    }
+
+    /// With a wrong password the server answers 200 and a JSON error: that is no song.
+    @Test func refusedStreamsAreNotCached() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-live-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let album = try await client.albumList(.alphabeticalByName).first!
+        let song = try #require(try await client.album(album.id).song?.first)
+        let wrong = NavidromeClient(server: NavidromeLive.server, password: "not-the-password")
+        let cache = AudioCache(directory: folder, limit: 100_000_000)
+        let stream = await cache.stream(wrong.streamURL(songID: song.id), key: "refused", fileExtension: "mp3")
+        do {
+            try await stream.completion()
+            Issue.record("the stream should have failed")
+        } catch let error as NavidromeError {
+            #expect(error.code == 40)
+        }
+        let usage = await cache.usage()
+        #expect(cache.peek("refused") == nil && usage == 0)
     }
 
     @Test func browsingFallsBackToCachedResponsesOffline() async throws {

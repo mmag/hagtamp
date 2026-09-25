@@ -4,7 +4,7 @@
 the playlist, where the longer name doesn't fit), the logo on the main
 window's about button becomes Hagtamp's (art/logo-skin.png, from
 scripts/make_logo.py), and the Winamp bolt on the title bar's menu button
-becomes an H.
+becomes an H. The easter-egg title bars become plain ones.
 
 Letters are reused from the skin's own lettering (A, M, P from WINAMP; T and
 PLAYLIST from the playlist title; EQUALIZER from the equalizer title); H and
@@ -257,6 +257,10 @@ def main():
     # Main window title bar, active and inactive (sprite x = 27).
     for oy in (0, 15):
         retitle_bar(titlebar, oy, (5, 11), (143, 186), 140, 188, HAGTAMP, gap_x=142)
+    # The easter-egg bars (y 57 and 72, shown in Winamp after typing its
+    # maker's name) carry a slogan: they become copies of the plain bars.
+    for src_y, dst_y in ((0, 57), (15, 72)):
+        titlebar.paste(titlebar.crop((27, src_y, 302, src_y + 14)), (27, dst_y))
     # Equalizer title bar, active and inactive.
     for oy in (134, 149):
         retitle_bar(eqmain, oy, (5, 12), (93, 190), 89, 193, HAGTAMP_EQUALIZER, gap_x=91)

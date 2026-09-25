@@ -128,7 +128,7 @@ public final class MilkdropEngine: @unchecked Sendable {
         result.composite.gamma = Float(max(0, v("gamma")))
         result.composite.echoZoom = Float(v("echo_zoom"))
         result.composite.echoAlpha = Float(min(1, max(0, v("echo_alpha"))))
-        result.composite.echoOrientation = ((Int(v("echo_orient")) % 4) + 4) % 4
+        result.composite.echoOrientation = ((saturatingInt(v("echo_orient")) % 4) + 4) % 4
         result.composite.brighten = v("brighten") >= 0.5
         result.composite.darken = v("darken") >= 0.5
         result.composite.solarize = v("solarize") >= 0.5
@@ -242,7 +242,7 @@ public final class MilkdropEngine: @unchecked Sendable {
         let samples = Self.smooth(audio.waveform.map(Double.init), amount: preset.value("fwavesmoothing", 0.75))
         let mystery = v("wave_mystery")
         let center = SIMD2(v("wave_x"), v("wave_y"))
-        let mode = ((Int(v("wave_mode")) % 8) + 8) % 8
+        let mode = ((saturatingInt(v("wave_mode")) % 8) + 8) % 8
         let count = 288
         func sample(_ i: Int, _ offset: Int = 0) -> Double { samples[min(samples.count - 1, max(0, i * 2 + offset))] * scale }
         var points: [SIMD2<Double>] = []
@@ -308,7 +308,7 @@ public final class MilkdropEngine: @unchecked Sendable {
     /// Short lines showing where the image flows, on a grid.
     private func motionVectors(_ frame: MilkdropFrame) -> MilkdropFrame.Lines? {
         let alpha = frameVars["mv_a"]
-        let columns = Int(frameVars["mv_x"]), rows = Int(frameVars["mv_y"])
+        let columns = min(64, saturatingInt(frameVars["mv_x"])), rows = min(48, saturatingInt(frameVars["mv_y"]))
         guard alpha > 0.001, columns > 0, rows > 0, columns * rows <= 64 * 48 else { return nil }
         let length = frameVars["mv_l"], offset = SIMD2(frameVars["mv_dx"], frameVars["mv_dy"])
         let color = SIMD4(Float(frameVars["mv_r"]), Float(frameVars["mv_g"]), Float(frameVars["mv_b"]), Float(min(1, alpha)))
@@ -373,10 +373,10 @@ private struct WaveRuntime {
         for i in 0..<32 { vars["q\(i + 1)"] = q[i] }
         for i in 0..<8 { vars["t\(i + 1)"] = tAfterInit[i] }
         perFrame?.run(vars)
-        let count = min(512, max(0, Int(vars["samples"])))
+        let count = min(512, max(0, saturatingInt(vars["samples"])))
         guard count >= 2 else { return nil }
         let spectrum = vars["bspectrum"] >= 0.5
-        let separation = Int(vars["sep"]), scaling = vars["scaling"]
+        let separation = min(512, max(-512, saturatingInt(vars["sep"]))), scaling = vars["scaling"]
         let source: [Double] =
             spectrum
             ? audio.spectrum.map { Double($0) * 20 } : audio.waveform.map(Double.init)
@@ -435,7 +435,7 @@ private struct ShapeRuntime {
     }
 
     func frame(q: [Double], setInputs: (EELVariables) -> Void) -> [MilkdropFrame.Shape] {
-        let instances = min(1024, max(1, Int(shape.values["num_inst"] ?? 1)))
+        let instances = min(1024, max(1, saturatingInt(shape.values["num_inst"] ?? 1)))
         var result: [MilkdropFrame.Shape] = []
         for instance in 0..<instances {
             reset()
@@ -447,7 +447,7 @@ private struct ShapeRuntime {
             func color(_ prefix: String, _ alpha: String) -> SIMD4<Float> {
                 SIMD4(Float(vars[prefix + "r"]), Float(vars[prefix + "g"]), Float(vars[prefix + "b"]), Float(min(1, max(0, vars[alpha]))))
             }
-            let sides = min(100, max(3, Int(vars["sides"])))
+            let sides = min(100, max(3, saturatingInt(vars["sides"])))
             result.append(MilkdropFrame.Shape(
                 center: SIMD2(Float(vars["x"]), Float(vars["y"])), radius: Float(vars["rad"]), angle: Float(vars["ang"]), sides: sides,
                 centerColor: color("", "a"),

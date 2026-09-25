@@ -173,6 +173,40 @@ final class Counter: Sendable {
         withExtendedLifetime(watcher) {}
     }
 
+    /// Only audio files and folders matter; other files and ignored folders (the app's own) don't.
+    @Test func watcherIgnoresWhatIsntMusic() async throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let own = music.appendingPathComponent("AppData")
+        try FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
+        let calls = Counter()
+        let watcher = FolderWatcher([music], latency: 0.2, extensions: ["flac"], ignoring: [own]) { calls.add() }
+        // FSEvents may still report the folders just created; count from here.
+        try await Task.sleep(for: .milliseconds(800))
+        let before = calls.value
+        try Data("settings".utf8).write(to: music.appendingPathComponent("notes.txt"))
+        try Data("cache".utf8).write(to: own.appendingPathComponent("song.flac"))
+        try await Task.sleep(for: .seconds(1.5))
+        #expect(calls.value == before)
+        try makeTrack("New/01.flac", title: "New", artist: "N", album: "N", track: 1)
+        for _ in 0..<50 where calls.value == before { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(calls.value > before)
+        withExtendedLifetime(watcher) {}
+    }
+
+    /// A folder that is missing at a scan (a disk not mounted) keeps its tracks.
+    @Test func unreachableFolderKeepsItsFiles() async throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try makeTrack("Disk/01.flac", title: "One", artist: "A", album: "A", track: 1)
+        let disk = music.appendingPathComponent("Disk"), away = music.appendingPathComponent("Away")
+        let (library, _) = await open([disk])
+        #expect(await library.catalog.trackCount == 1)
+        try FileManager.default.moveItem(at: disk, to: away)
+        await library.rescan()
+        await library.waitForScan()
+        #expect(await library.catalog.trackCount == 1)
+        try FileManager.default.moveItem(at: away, to: disk)
+    }
+
     @Test func removingAFolderDropsItsFiles() async throws {
         defer { try? FileManager.default.removeItem(at: folder) }
         try makeTrack("A/01.flac", title: "A1", artist: "A", album: "A", track: 1)

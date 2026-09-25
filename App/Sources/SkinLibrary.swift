@@ -30,6 +30,16 @@ enum SkinLibrary {
         Storage.defaults.string(forKey: lastSkinKey).map { URL(fileURLWithPath: $0) }
     }
 
+    /// Loads a skin file or folder; a folder without MAIN.BMP isn't taken for a skin.
+    static func load(_ url: URL) throws -> Skin {
+        guard WindowManager.isSkin(url) else {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadCorruptFileError, userInfo: [
+                NSLocalizedDescriptionKey: "This folder isn't a skin: a skin folder has a MAIN.BMP in it."
+            ])
+        }
+        return try Skin.load(contentsOf: url)
+    }
+
     /// Copies a skin into the Skins folder unless it is there already; returns where it is.
     static func install(_ url: URL) -> URL {
         let target = folder.appendingPathComponent(url.lastPathComponent, isDirectory: url.hasDirectoryPath)
@@ -128,7 +138,7 @@ final class SkinBrowserModel {
         panel.allowsMultipleSelection = true
         panel.message = "Choose skins (.wsz) to add"
         guard panel.runModal() == .OK else { return }
-        for url in panel.urls { _ = SkinLibrary.install(url) }
+        for url in panel.urls where (try? SkinLibrary.load(url)) != nil { _ = SkinLibrary.install(url) }
         reload()
     }
 

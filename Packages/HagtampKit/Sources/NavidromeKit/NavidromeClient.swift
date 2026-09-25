@@ -67,7 +67,16 @@ public final class NavidromeClient: Sendable {
     private let session: URLSession
     private let responseCache: URL?
 
-    public init(server: NavidromeServer, credentials: NavidromeCredentials, session: URLSession = .shared, responseCache: URL? = nil) {
+    /// Request URLs carry the login (a token and its salt), so they stay out
+    /// of the system's HTTP cache; browsing has a cache of its own.
+    public static let session: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
+
+    public init(server: NavidromeServer, credentials: NavidromeCredentials, session: URLSession = NavidromeClient.session, responseCache: URL? = nil) {
         self.server = server
         self.credentials = credentials
         self.session = session
@@ -77,7 +86,7 @@ public final class NavidromeClient: Sendable {
         }
     }
 
-    public convenience init(server: NavidromeServer, password: String, session: URLSession = .shared, responseCache: URL? = nil) {
+    public convenience init(server: NavidromeServer, password: String, session: URLSession = NavidromeClient.session, responseCache: URL? = nil) {
         self.init(server: server, credentials: .password(password), session: session, responseCache: responseCache)
     }
 
@@ -222,10 +231,10 @@ public final class NavidromeClient: Sendable {
     // MARK: - Media URLs
 
     /// Stream URL; `format`/`maxBitRate` ask the server to transcode (nil = original file).
-    /// Transcoded streams come with an estimated length, which decoders need up front.
+    /// No estimated length is asked for: Navidrome's estimate runs a few percent
+    /// over, and a response shorter than announced ends as a failed download.
     public func streamURL(songID: String, format: String? = nil, maxBitRate: Int? = nil) -> URL {
         var params = ["id": songID]
-        if format != nil { params["estimateContentLength"] = "true" }
         if let format { params["format"] = format }
         if let maxBitRate { params["maxBitRate"] = String(maxBitRate) }
         return url("stream", params)

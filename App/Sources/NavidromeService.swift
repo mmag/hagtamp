@@ -72,6 +72,10 @@ final class NavidromeService: RemoteTrackResolver {
             offlineDirectory: Storage.supportDirectory.appendingPathComponent("Offline", isDirectory: true),
             limit: Int64(limit > 0 ? limit : 2000) * 1_000_000)
         try? FileManager.default.createDirectory(at: coverFolder, withIntermediateDirectories: true)
+        Task { [audioCache] in await audioCache.removeInvalidFiles() }
+        Self.forgetHTTPCache()
+        Self.trim(coverFolder, to: 150_000_000)
+        Self.trim(Self.responseFolder, to: 50_000_000)
         if let url = defaults.url(forKey: Keys.url), let username = defaults.string(forKey: Keys.username) {
             let server = NavidromeServer(url: url, username: username)
             connect(server, credentials: CredentialsStore.credentials(for: Self.account(server)) ?? Self.moveFromKeychain(server))
@@ -95,19 +99,70 @@ final class NavidromeService: RemoteTrackResolver {
 
     func configure(url: URL, username: String, credentials: NavidromeCredentials) {
         let server = NavidromeServer(url: url, username: username)
+        let previous = self.server
         Storage.defaults.set(url, forKey: Keys.url)
         Storage.defaults.set(username, forKey: Keys.username)
         CredentialsStore.set(credentials, for: Self.account(server))
         connect(server, credentials: credentials)
+        protectOfflineSongs()
+        if let previous, previous.key != server.key { adoptOfflineMusic(of: previous) }
         onChange?()
     }
 
+    private static var responseFolder: URL { Storage.cacheDirectory.appendingPathComponent("Responses", isDirectory: true) }
+
     private func connect(_ server: NavidromeServer, credentials: NavidromeCredentials?) {
         self.server = server
-        client = credentials.map {
-            NavidromeClient(
-                server: server, credentials: $0,
-                responseCache: Storage.cacheDirectory.appendingPathComponent("Responses", isDirectory: true))
+        client = credentials.map { NavidromeClient(server: server, credentials: $0, responseCache: Self.responseFolder) }
+    }
+
+    /// The same server at a new address (say an IP address replaced by a
+    /// host name): its music kept offline and its cache carry over. It counts
+    /// as the same server when an album or playlist kept offline is there too.
+    private func adoptOfflineMusic(of previous: NavidromeServer) {
+        let all = Self.savedPins()
+        guard let server, let client, let pins = all[previous.key], let probe = pins.first, all[server.key]?.isEmpty ?? true else { return }
+        Task {
+            let found = (try? await (probe.kind == .album ? client.album(probe.id).song : client.playlist(probe.id).entry)) != nil
+            guard found, self.server?.key == server.key else { return }
+            var all = Self.savedPins()
+            all[server.key] = all.removeValue(forKey: previous.key)
+            try? JSONEncoder().encode(all).write(to: Self.pinsFile, options: .atomic)
+            await audioCache.renameFiles(prefix: "\(previous.key)-", to: "\(server.key)-")
+            protectOfflineSongs()
+            onChange?()
+        }
+    }
+
+    /// Earlier versions fetched through the shared URL session, whose HTTP
+    /// cache (Caches/<bundle id>/Cache.db) kept request URLs, login token included.
+    private static func forgetHTTPCache() {
+        let key = "httpCacheForgotten"
+        guard !Storage.defaults.bool(forKey: key) else { return }
+        URLCache.shared.removeAllCachedResponses()
+        Storage.defaults.set(true, forKey: key)
+    }
+
+    /// Deletes the least recently written files of a folder beyond `limit` bytes.
+    private static func trim(_ folder: URL, to limit: Int64) {
+        let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
+        var files = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys)) ?? []).map { url in
+            let values = try? url.resourceValues(forKeys: Set(keys))
+            return (url: url, size: Int64(values?.fileSize ?? 0), date: values?.contentModificationDate ?? .distantPast)
+        }
+        var total = files.reduce(0) { $0 + $1.size }
+        files.sort { $0.date < $1.date }
+        for file in files where total > limit {
+            try? FileManager.default.removeItem(at: file.url)
+            total -= file.size
+        }
+    }
+
+    /// Empties the audio cache and the covers (music kept offline stays).
+    func clearCache() async {
+        await audioCache.clear()
+        for file in (try? FileManager.default.contentsOfDirectory(at: coverFolder, includingPropertiesForKeys: nil)) ?? [] {
+            try? FileManager.default.removeItem(at: file)
         }
     }
 
@@ -158,7 +213,15 @@ final class NavidromeService: RemoteTrackResolver {
         server.map { "\($0.key)-\(songID)-\(quality.rawValue)" }
     }
 
+    /// A downloaded song about to play: marked as used, so trimming the cache
+    /// leaves it be.
     func cachedFile(for url: URL) -> URL? {
+        guard let file = downloadedFile(for: url) else { return nil }
+        audioCache.markUsed(file)
+        return file
+    }
+
+    private func downloadedFile(for url: URL) -> URL? {
         guard let id = NavidromeTrack.songID(from: url), let key = cacheKey(id), let server else { return nil }
         // A song kept offline plays in whatever quality it was downloaded.
         return audioCache.peek(key) ?? (offlineSongIDs.contains(id) ? audioCache.peek(prefix: "\(server.key)-\(id)-") : nil)
@@ -197,7 +260,13 @@ final class NavidromeService: RemoteTrackResolver {
             if let error = state.error { throw error }
             return .file(cachedFile(for: url) ?? stream.url)  // kept offline, it has moved
         }
+        audioCache.markUsed(stream.url)  // the file it becomes
         return .stream(try StreamingTrack(url: stream.url, partialFile: stream.partialFile, state: state))
+    }
+
+    func info(for url: URL) async -> TrackInfo? {
+        guard let id = NavidromeTrack.songID(from: url), let client, let song = try? await client.song(id) else { return nil }
+        return NavidromeTrack.info(for: song)
     }
 
     // MARK: - Keep offline
@@ -232,6 +301,8 @@ final class NavidromeService: RemoteTrackResolver {
     private var offlineSongIDs: Set<String> { Set(offlinePins.flatMap(\.songIDs)) }
     /// Songs downloaded / to download while keeping music offline.
     private(set) var offlineProgress: (done: Int, total: Int)?
+    /// Songs the last offline sync couldn't download (tried again at the next).
+    private(set) var offlineFailures = 0
     private var offlineTask: Task<Void, Never>?
 
     func isKeptOffline(_ kind: OfflinePin.Kind, id: String) -> Bool {
@@ -252,20 +323,30 @@ final class NavidromeService: RemoteTrackResolver {
         offlineTask?.cancel()
         offlineTask = Task { [weak self] in
             guard let self else { return }
-            var pins = self.offlinePins
-            for (i, pin) in pins.enumerated() {
+            var refreshed: [String: [String]] = [:]
+            for pin in self.offlinePins {
                 let songs = try? await (pin.kind == .album ? client.album(pin.id).song : client.playlist(pin.id).entry)
-                if let songs { pins[i].songIDs = songs.map(\.id) }
+                if let songs { refreshed["\(pin.kind.rawValue)/\(pin.id)"] = songs.map(\.id) }
             }
             guard !Task.isCancelled else { return }
-            self.offlinePins = pins
-            let missing = Array(self.offlineSongIDs.filter { self.cachedFile(for: NavidromeTrack.url(songID: $0)) == nil })
+            // Pins may have changed meanwhile: only those still there take the new lists.
+            self.offlinePins = self.offlinePins.map { pin in
+                var pin = pin
+                if let songs = refreshed["\(pin.kind.rawValue)/\(pin.id)"] { pin.songIDs = songs }
+                return pin
+            }
+            await self.audioCache.removeInvalidFiles()
+            let missing = Array(self.offlineSongIDs.filter { self.downloadedFile(for: NavidromeTrack.url(songID: $0)) == nil })
             self.offlineProgress = missing.isEmpty ? nil : (0, missing.count)
+            self.offlineFailures = 0
             self.onChange?()
             for (done, id) in missing.enumerated() {
                 guard !Task.isCancelled, let key = self.cacheKey(id) else { break }
-                let (source, fileExtension) = await self.streamSource(id, client: client)
-                _ = try? await self.audioCache.fetch(source, key: key, fileExtension: fileExtension)
+                // Unkept while this runs: skipped.
+                if self.offlineSongIDs.contains(id) {
+                    let (source, fileExtension) = await self.streamSource(id, client: client)
+                    if (try? await self.audioCache.fetch(source, key: key, fileExtension: fileExtension)) == nil { self.offlineFailures += 1 }
+                }
                 self.offlineProgress = (done + 1, missing.count)
                 self.onChange?()
             }
@@ -274,9 +355,10 @@ final class NavidromeService: RemoteTrackResolver {
         }
     }
 
+    /// Music kept offline for any server stays out of the cache's reach,
+    /// not only the configured one's.
     private func protectOfflineSongs() {
-        guard let server else { return }
-        let prefixes = Set(offlineSongIDs.map { "\(server.key)-\($0)-" })
+        let prefixes = Set(Self.savedPins().flatMap { key, pins in pins.flatMap(\.songIDs).map { "\(key)-\($0)-" } })
         Task { await audioCache.keepOffline(keyPrefixes: prefixes) }
     }
 
@@ -293,8 +375,11 @@ final class NavidromeService: RemoteTrackResolver {
     func cover(for url: URL) async -> NSImage? {
         guard let id = NavidromeTrack.songID(from: url), let client, let server else { return nil }
         let file = coverFolder.appendingPathComponent("\(AudioCacheKey.safe(server.key))-\(id).img")
-        if let data = try? Data(contentsOf: file) { return NSImage(data: data) }
-        guard let (data, response) = try? await URLSession.shared.data(from: client.coverArtURL(id: id, size: 600)),
+        if let data = try? Data(contentsOf: file) {
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)  // recently used
+            return NSImage(data: data)
+        }
+        guard let (data, response) = try? await NavidromeClient.session.data(from: client.coverArtURL(id: id, size: 600)),
             (response as? HTTPURLResponse)?.statusCode == 200, let image = NSImage(data: data)
         else { return nil }
         try? data.write(to: file)

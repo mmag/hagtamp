@@ -23,6 +23,7 @@ extension NavidromeService: LibrarySource {
     func setUp() { (NSApp.delegate as? AppDelegate)?.showPreferences(tab: .navidrome) }
     var activity: String? {
         offlineProgress.map { "Downloading for offline: \($0.done) of \($0.total)" }
+            ?? (offlineFailures > 0 ? "\(offlineFailures) song\(offlineFailures == 1 ? "" : "s") couldn't be downloaded for offline" : nil)
     }
 
     func isKeptOffline(_ item: LibraryItem) -> Bool? {

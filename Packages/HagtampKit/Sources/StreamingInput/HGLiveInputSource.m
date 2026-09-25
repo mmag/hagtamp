@@ -9,6 +9,10 @@
 
 /// Read data is dropped from the front of the buffer once this much has piled up.
 static const NSUInteger HGCompactThreshold = 256 * 1024;
+/// Unread data beyond this (minutes of audio: the stream paused, or a server
+/// sending faster than real time) loses its oldest part. A live stream moves
+/// on anyway, and the decoders find the next frame.
+static const NSUInteger HGMaxUnread = 4 * 1024 * 1024;
 
 @implementation HGLiveInputSource {
     NSCondition *_condition;
@@ -32,6 +36,16 @@ static const NSUInteger HGCompactThreshold = 256 * 1024;
 - (void)appendData:(NSData *)data {
     [_condition lock];
     [_buffer appendData:data];
+    NSUInteger unread = _buffer.length - _head;
+    if (unread > HGMaxUnread) {
+        NSUInteger drop = unread - HGMaxUnread;
+        _head += drop;
+        _offset += (NSInteger)drop;
+    }
+    if (_head >= HGCompactThreshold) {
+        [_buffer replaceBytesInRange:NSMakeRange(0, _head) withBytes:NULL length:0];
+        _head = 0;
+    }
     [_condition broadcast];
     [_condition unlock];
 }

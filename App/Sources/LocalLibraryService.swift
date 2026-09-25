@@ -1,4 +1,5 @@
 import AppKit
+import AudioCore
 import LibraryKit
 import PlayerCore
 
@@ -35,7 +36,9 @@ final class LocalLibraryService: LibrarySource {
 
     private func watch() {
         let library = self.library
-        watcher = FolderWatcher(folders) { Task { await library.rescan() } }
+        watcher = FolderWatcher(folders, extensions: TrackInfo.supportedExtensions, ignoring: [Storage.supportDirectory, Storage.cacheDirectory]) {
+            Task { await library.rescan() }
+        }
     }
 
     // MARK: - Folders

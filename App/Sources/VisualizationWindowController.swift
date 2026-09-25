@@ -62,6 +62,8 @@ final class VisualizationWindowController: SkinWindowController {
         didSet { renderLoop?.setLocked(locked) }
     }
     private var fullScreen: FullScreenVisualization?
+    private var shown = false
+    private var occlusionObserver: NSObjectProtocol?
 
     init(manager: WindowManager) {
         let view = MetalLayerView(device: MTLCreateSystemDefaultDevice())
@@ -71,6 +73,18 @@ final class VisualizationWindowController: SkinWindowController {
             self?.next(blend: true)
         }
         window.skinView.addSubview(view)
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateDrawing() }
+        }
+    }
+
+    /// Draws only while someone can see it: the window shown and not entirely
+    /// covered by others (macOS doesn't composite a covered window, so its
+    /// frames would have nowhere to go), or full screen.
+    private func updateDrawing() {
+        renderLoop?.setPaused(!(fullScreen != nil || (shown && window.occlusionState.contains(.visible))))
     }
 
     private var width: Int { GenWindowRenderer.baseWidth + widthSteps * 25 }
@@ -110,10 +124,10 @@ final class VisualizationWindowController: SkinWindowController {
         return GenWindowRenderer.render(manager.skin, frame)
     }
 
-    /// Draws only while someone can see it.
     override func visibilityChanged(_ visible: Bool) {
         if visible, presetIndex < 0 { next(blend: false) }
-        renderLoop?.setPaused(!visible && fullScreen == nil)
+        shown = visible
+        updateDrawing()
     }
 
     // MARK: - Presets
@@ -143,11 +157,7 @@ final class VisualizationWindowController: SkinWindowController {
 
     /// The preset's name shows in the main window's marquee for a moment.
     private func announce(_ text: String) {
-        manager.marqueeMessage = text.uppercased()
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(2.5))
-            if self?.manager.marqueeMessage == text.uppercased() { self?.manager.marqueeMessage = nil }
-        }
+        manager.showMessage(text, seconds: 2.5)
     }
 
     var currentPresetName: String? {
@@ -282,12 +292,12 @@ final class VisualizationWindowController: SkinWindowController {
             self.fullScreen = nil
             window.skinView.addSubview(metalView)
             manager.render()
-            renderLoop?.setPaused(!window.isVisible)
             window.makeKeyAndOrderFront(nil)
+            updateDrawing()
         } else {
             guard let screen = window.screen ?? NSScreen.main else { return }
             fullScreen = FullScreenVisualization(view: metalView, screen: screen, controller: self)
-            renderLoop?.setPaused(false)
+            updateDrawing()
         }
     }
 }
@@ -376,6 +386,7 @@ private final class VisualizationRenderLoop: NSObject, CAMetalDisplayLinkDelegat
         }
         thread.name = "Visualization"
         thread.qualityOfService = .userInteractive
+        thread.stackSize = 8 << 20  // preset code is compiled and run recursively
         thread.start()
         ready.wait()
     }

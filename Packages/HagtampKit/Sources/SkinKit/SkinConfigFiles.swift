@@ -142,13 +142,15 @@ public struct SkinRegions: Sendable, Equatable {
                 return nil
             }
             let separators: (Character) -> Bool = { $0 == "," || $0 == " " || $0 == "\t" }
-            let pointCounts = counts.split(whereSeparator: separators).compactMap { Int($0) }
-            let coords = list.split(whereSeparator: separators).map { Int($0) ?? 0 }
+            // Windows are a few hundred pixels: far-off coordinates are clamped, so
+            // the arithmetic on them can't overflow.
+            let coords = list.split(whereSeparator: separators).map { min(65535, max(-65535, Int($0) ?? 0)) }
             let points = stride(from: 0, to: coords.count - 1, by: 2).map { Point(x: coords[$0], y: coords[$0 + 1]) }
+            let pointCounts = counts.split(whereSeparator: separators).compactMap { Int($0) }.map { min(max(0, $0), points.count + 1) }
             var result: [Polygon] = []
             var at = 0
             for count in pointCounts {
-                defer { at += max(0, count) }
+                defer { at += count }
                 // Degenerate polygons are skipped; authors also declare more points than they list.
                 guard count >= 3, at + count <= points.count else { continue }
                 result.append(Array(points[at..<at + count]))

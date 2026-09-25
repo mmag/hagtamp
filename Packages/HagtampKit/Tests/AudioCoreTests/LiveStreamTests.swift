@@ -1,6 +1,7 @@
 import AVFAudio
 import Foundation
 @preconcurrency import SFBAudioEngine
+import StreamingInput
 import Testing
 import os
 
@@ -91,6 +92,17 @@ final class FakeRadio: URLProtocol, @unchecked Sendable {
         #expect(LiveConnection.streamTitle(in: Data([0x53, 0x74]) + Data(count: 14)) == nil)
         let latin1 = "StreamTitle='Motörhead - Ace';".data(using: .isoLatin1)!
         #expect(LiveConnection.streamTitle(in: latin1) == "Motörhead - Ace")
+    }
+
+    /// A paused station keeps sending: only the latest few MB are kept.
+    @Test func unreadAudioIsCapped() throws {
+        let source = LiveInputSource(url: URL(string: "http://radio.test/stream.mp3")!)
+        for i in 0..<20 { source.append(Data(repeating: UInt8(i), count: 256 * 1024)) }
+        #expect(source.bufferedBytes == 4 * 1024 * 1024)
+        try source.open()
+        var bytes = [UInt8](repeating: 0, count: 4)
+        _ = try source.read(&bytes, length: 4)
+        #expect(bytes == [4, 4, 4, 4])  // the first 4 chunks went
     }
 
     @Test func stationPlaylistsLeadToTheirStream() {

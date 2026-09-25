@@ -37,14 +37,14 @@ public final class LiveStream: @unchecked Sendable {
         }
         var source = LiveInputSource(url: url)
         var connection = LiveConnection(source: source, onTitle: onTitle)
-        var response = try await connection.start(streamURL, configuration: configuration)
+        var response = try await start(connection, streamURL, configuration: configuration)
         // Some station links serve a playlist without saying so in the name.
         if isPlaylist(path: "", contentType: response.mimeType) {
             connection.cancel()
             streamURL = try await resolve(playlist: streamURL, configuration: configuration)
             source = LiveInputSource(url: url)
             connection = LiveConnection(source: source, onTitle: onTitle)
-            response = try await connection.start(streamURL, configuration: configuration)
+            response = try await start(connection, streamURL, configuration: configuration)
         }
         guard let mimeType = decoderType(for: response.mimeType, path: streamURL.path) else {
             connection.cancel()
@@ -58,6 +58,16 @@ public final class LiveStream: @unchecked Sendable {
             }
             if source.finished && source.bufferedBytes == 0 { throw LiveStreamError("The station sent nothing") }
             return try LiveStream(url: url, source: source, connection: connection, mimeType: mimeType)
+        } catch {
+            connection.cancel()
+            throw error
+        }
+    }
+
+    /// A connection that fails to start is closed (its session would keep it alive).
+    private static func start(_ connection: LiveConnection, _ url: URL, configuration: URLSessionConfiguration) async throws -> URLResponse {
+        do {
+            return try await connection.start(url, configuration: configuration)
         } catch {
             connection.cancel()
             throw error
@@ -101,8 +111,15 @@ public final class LiveStream: @unchecked Sendable {
     /// The first stream in a .pls or .m3u station playlist.
     static func resolve(playlist url: URL, configuration: URLSessionConfiguration) async throws -> URL {
         let session = URLSession(configuration: configuration)
-        defer { session.finishTasksAndInvalidate() }
-        let (data, _) = try await session.data(from: url)
+        defer { session.invalidateAndCancel() }
+        // Station playlists are a few lines; a link that is really a stream
+        // would never end, so reading stops at 256 KB.
+        let (bytes, _) = try await session.bytes(from: url)
+        var data = Data()
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count >= 256 * 1024 { break }
+        }
         guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1),
             let first = firstStream(inPlaylist: text)
         else { throw LiveStreamError("No stream in the station's playlist") }

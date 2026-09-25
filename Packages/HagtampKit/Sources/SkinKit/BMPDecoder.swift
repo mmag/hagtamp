@@ -57,7 +57,7 @@ enum BMPDecoder {
 
         let topDown = height < 0
         height = abs(height)
-        guard width > 0, height > 0, width <= 16384, height <= 16384 else {
+        guard width > 0, height > 0, Bitmap.allowsSize(width: width, height: height) else {
             throw Failure.unsupported("dimensions \(width)x\(height)")
         }
         guard [1, 2, 4, 8, 16, 24, 32].contains(bpp) else { throw Failure.unsupported("\(bpp) bpp") }
@@ -265,7 +265,8 @@ extension BMPDecoder {
             for x in 0..<width {
                 var color = bitmap[x, y]
                 if hasAlpha {
-                    let alpha = UInt32(bytes[xorStart + row * xorStride + x * 4 + 3])
+                    let at = xorStart + row * xorStride + x * 4 + 3
+                    let alpha = at < bytes.count ? UInt32(bytes[at]) : 0  // truncated pixel data
                     func premultiply(_ c: UInt8) -> UInt32 { (UInt32(c) * alpha + 127) / 255 }
                     color = PixelColor(argb: alpha << 24 | premultiply(color.red) << 16 | premultiply(color.green) << 8 | premultiply(color.blue))
                 } else {

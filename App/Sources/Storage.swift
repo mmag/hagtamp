@@ -3,7 +3,13 @@ import Foundation
 /// Where the app keeps its settings and files. The self test gets its own
 /// defaults domain and folder so it never touches the user's state.
 enum Storage {
+    #if DEBUG
     private static let selfTestDirectory = ProcessInfo.processInfo.environment["HAGTAMP_SELFTEST"]
+    #else
+    // Release builds ignore the variable: pointed at a real folder, the app
+    // would move and delete its cache files there.
+    private static let selfTestDirectory: String? = nil
+    #endif
     static var isSelfTest: Bool { selfTestDirectory != nil }
 
     // UserDefaults is documented as thread-safe.
