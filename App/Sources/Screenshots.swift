@@ -92,6 +92,7 @@ enum Screenshots {
         manager.toggleLyrics()
         manager.toggleVisualization()
         manager.windowSizeChanged()
+        await wait { vis.library.isLoaded }  // the preset list is read in the background
         showPreset("Aurora", in: vis)
         try? await Task.sleep(for: .seconds(9))
         print("screenshots: at \(Int(model.elapsed)) s, engine volume \(model.engine.volume), visualization frames \(vis.framesDrawn)")
@@ -351,7 +352,7 @@ enum Screenshots {
     }
 
     private static func showPreset(_ name: String, in vis: VisualizationWindowController) {
-        if let index = vis.library.presets.firstIndex(where: { PresetLibrary.name($0).hasSuffix(name) }) { vis.show(index, blend: false) }
+        if let url = vis.library.presets.first(where: { PresetLibrary.name($0).hasSuffix(name) }) { vis.show(url, blend: false) }
     }
 
     /// Windows one under another at `x`.

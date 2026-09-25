@@ -8,45 +8,11 @@ import MilkdropMetal
 import QuartzCore
 import SkinKit
 
-/// Presets (.milk): the ones that come with the app, then the user's in
-/// Application Support/Hagtamp/Presets, by name.
-@MainActor
-final class PresetLibrary {
-    static var userFolder: URL {
-        let folder = Storage.supportDirectory.appendingPathComponent("Presets", isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        return folder
-    }
-
-    private(set) var presets: [URL] = []
-
-    init() {
-        reload()
-    }
-
-    func reload() {
-        let folders = [Bundle.main.url(forResource: "Presets", withExtension: nil), Self.userFolder].compactMap { $0 }
-        let files = folders.flatMap { folder in
-            FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
-        }
-        presets = files.filter { $0.pathExtension.lowercased() == "milk" }
-            .sorted { Self.name($0).localizedStandardCompare(Self.name($1)) == .orderedAscending }
-    }
-
-    static func name(_ url: URL) -> String { url.deletingPathExtension().lastPathComponent }
-
-    func load(_ url: URL) -> MilkdropPreset? {
-        guard let data = try? Data(contentsOf: url),
-            let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
-        else { return nil }
-        return MilkdropPreset.parse(text, name: Self.name(url))
-    }
-}
-
 /// The visualization window: MilkDrop-style presets drawn with Metal in a
 /// generic skinned frame, or full screen. Keys as in MilkDrop: Space or →
 /// next preset (blended), ← or Backspace previous, H hard cut, R random
-/// order, L keep this preset, F/Return/double-click full screen, Esc back.
+/// order, L keep this preset, P the preset browser, F/Return/double-click
+/// full screen, Esc back.
 @MainActor
 final class VisualizationWindowController: SkinWindowController {
     private var widthSteps = 5
@@ -55,8 +21,13 @@ final class VisualizationWindowController: SkinWindowController {
     private let metalView: MetalLayerView
     private var renderLoop: VisualizationRenderLoop?
     let library = PresetLibrary()
-    private(set) var presetIndex = -1
-    private var history: [Int] = []
+    private(set) var currentPreset: URL?
+    private var history: [URL] = []
+    /// Picked by hand: it stays even if it turns out too heavy.
+    private var chosenByHand = false
+    private lazy var browser = PresetBrowserController(library: library) { [weak self] url in
+        self?.show(url, blend: true, byHand: true)
+    }
     var random = true
     var locked = false {
         didSet { renderLoop?.setLocked(locked) }
@@ -69,10 +40,12 @@ final class VisualizationWindowController: SkinWindowController {
         let view = MetalLayerView(device: MTLCreateSystemDefaultDevice())
         metalView = view
         super.init(id: .visualization, manager: manager)
-        renderLoop = VisualizationRenderLoop(layer: view.metalLayer, samples: manager.model.engine.samples) { [weak self] in
-            self?.next(blend: true)
-        }
+        renderLoop = VisualizationRenderLoop(
+            layer: view.metalLayer, samples: manager.model.engine.samples,
+            onPresetFinished: { [weak self] in self?.next(blend: true) },
+            onTooHeavy: { [weak self] in self?.presetTooHeavy() })
         window.skinView.addSubview(view)
+        library.onChange = { [weak self] in self?.libraryChanged() }
         occlusionObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
         ) { [weak self] _ in
@@ -125,19 +98,32 @@ final class VisualizationWindowController: SkinWindowController {
     }
 
     override func visibilityChanged(_ visible: Bool) {
-        if visible, presetIndex < 0 { next(blend: false) }
         shown = visible
+        if visible, currentPreset == nil { next(blend: false) }
         updateDrawing()
+    }
+
+    /// The list arrived or changed (files added or removed, heavy marks).
+    private func libraryChanged() {
+        if shown, currentPreset == nil { next(blend: false) }
+        if browser.isShown { browser.model.reload() }
     }
 
     // MARK: - Presets
 
-    func next(blend: Bool) {
-        let count = library.presets.count
-        guard count > 0 else { return }
-        var index = random ? Int.random(in: 0..<count) : (presetIndex + 1) % count
-        if random, count > 1, index == presetIndex { index = (index + 1) % count }
-        show(index, blend: blend)
+    /// A random preset, or the next by name; presets found too heavy are passed over.
+    func next(blend: Bool, announcing: Bool = true) {
+        let all = library.presets
+        guard !all.isEmpty else { return }
+        let url: URL
+        if random {
+            let candidates = library.candidates
+            url = candidates.count > 1 ? candidates.filter { $0 != currentPreset }.randomElement()! : candidates[0]
+        } else {
+            let start = currentPreset.flatMap { all.firstIndex(of: $0) } ?? -1
+            url = (1...all.count).lazy.map { all[(start + $0) % all.count] }.first { !self.library.isHeavy($0) } ?? all[(start + 1) % all.count]
+        }
+        show(url, blend: blend, announcing: announcing)
     }
 
     func previous() {
@@ -146,13 +132,29 @@ final class VisualizationWindowController: SkinWindowController {
         show(history.removeLast(), blend: true)
     }
 
-    func show(_ index: Int, blend: Bool) {
-        guard library.presets.indices.contains(index), let preset = library.load(library.presets[index]) else { return }
-        presetIndex = index
-        history.append(index)
+    func show(_ url: URL, blend: Bool, byHand: Bool = false, announcing: Bool = true) {
+        guard let preset = library.load(url) else { return }
+        currentPreset = url
+        chosenByHand = byHand
+        history.append(url)
         if history.count > 50 { history.removeFirst() }
         renderLoop?.load(preset, blend: blend)
-        announce(preset.name)
+        browser.model.current = url
+        if announcing { announce(preset.name) }
+    }
+
+    /// The preset keeps missing the display's pace: it is marked, and unless
+    /// it was picked by hand (or locked) the next one takes over at once.
+    private func presetTooHeavy() {
+        guard let url = currentPreset else { return }
+        library.markHeavy(url)
+        guard !locked, !chosenByHand else { return }
+        announce("Too slow, skipped: \(PresetLibrary.name(url))")
+        next(blend: false, announcing: false)
+    }
+
+    func showBrowser() {
+        browser.show(current: currentPreset)
     }
 
     /// The preset's name shows in the main window's marquee for a moment.
@@ -160,9 +162,7 @@ final class VisualizationWindowController: SkinWindowController {
         manager.showMessage(text, seconds: 2.5)
     }
 
-    var currentPresetName: String? {
-        library.presets.indices.contains(presetIndex) ? PresetLibrary.name(library.presets[presetIndex]) : nil
-    }
+    var currentPresetName: String? { currentPreset.map(PresetLibrary.name) }
 
     var framesDrawn: Int { renderLoop?.framesDrawn ?? 0 }
 
@@ -216,6 +216,7 @@ final class VisualizationWindowController: SkinWindowController {
             locked.toggle()
             announce(locked ? "Preset locked" : "Preset unlocked")
             manager.saveLayout()
+        case (_, "p"): showBrowser()
         case (_, "f"), (36, _), (76, _): toggleFullScreen()
         case (53, _) where fullScreen != nil: toggleFullScreen()  // esc
         default: return false
@@ -257,6 +258,8 @@ final class VisualizationWindowController: SkinWindowController {
         NSMenu.popUpContextMenu(presetMenu(), with: event, for: window.skinView)
     }
 
+    static let presetsInMenu = 60
+
     /// Presets to pick from, and the window's options.
     func presetMenu() -> NSMenu {
         let menu = NSMenu()
@@ -272,15 +275,19 @@ final class VisualizationWindowController: SkinWindowController {
         })
         menu.addItem(WindowManager.item("Full Screen", checked: fullScreen != nil, key: "f") { [weak self] in self?.toggleFullScreen() })
         menu.addItem(.separator())
-        let presets = NSMenu()
-        for (index, url) in library.presets.enumerated() {
-            presets.addItem(WindowManager.item(PresetLibrary.name(url), checked: index == presetIndex) { [weak self] in self?.show(index, blend: true) })
+        menu.addItem(WindowManager.item("Choose Preset…", key: "p") { [weak self] in self?.showBrowser() })
+        // A short list fits a submenu; a big collection is for the browser.
+        if library.presets.count <= Self.presetsInMenu {
+            let presets = NSMenu()
+            for url in library.presets {
+                let title = PresetLibrary.name(url) + (library.isHeavy(url) ? " (slow)" : "")
+                presets.addItem(WindowManager.item(title, checked: url == currentPreset) { [weak self] in self?.show(url, blend: true, byHand: true) })
+            }
+            menu.addItem(WindowManager.submenu("Presets", presets))
         }
-        menu.addItem(WindowManager.submenu("Presets", presets))
         menu.addItem(WindowManager.item("Show Presets Folder") {
             NSWorkspace.shared.activateFileViewerSelecting([PresetLibrary.userFolder])
         })
-        menu.addItem(WindowManager.item("Reload Presets") { [weak self] in self?.library.reload() })
         return menu
     }
 
@@ -358,16 +365,32 @@ private final class VisualizationRenderLoop: NSObject, CAMetalDisplayLinkDelegat
     /// Seconds a preset stays before the next one blends in.
     private let presetSeconds = 20.0
     private let onPresetFinished: @MainActor @Sendable () -> Void
+    private let onTooHeavy: @MainActor @Sendable () -> Void
+    /// What the current preset's frames cost here (the engine and encoding,
+    /// seconds), over the last second and a half, once it has settled in.
+    private var costs: [Double] = []
+    private var framesSinceLoad = 0
+    private var slowRun = 0
+    private var heavyReported = false
+    /// Most of a 60 fps frame: the GPU and everything else need the rest.
+    private static let frameBudget = 0.012
+    /// A frame this slow is a stall; a few in a row are enough.
+    private static let stallLimit = 0.1
 
     private var runLoop: CFRunLoop?
     private let frames = OSAllocatedUnfairLock(initialState: 0)
 
-    /// `onPresetFinished` runs on the main thread when the preset has had its time.
-    init?(layer: CAMetalLayer, samples: SampleBuffer, onPresetFinished: @escaping @MainActor @Sendable () -> Void) {
+    /// `onPresetFinished` runs on the main thread when the preset has had its
+    /// time, `onTooHeavy` when it keeps missing the display's pace.
+    init?(
+        layer: CAMetalLayer, samples: SampleBuffer, onPresetFinished: @escaping @MainActor @Sendable () -> Void,
+        onTooHeavy: @escaping @MainActor @Sendable () -> Void
+    ) {
         guard let device = layer.device, let renderer = MilkdropRenderer(device: device, targetFormat: layer.pixelFormat) else { return nil }
         self.renderer = renderer
         self.samples = samples
         self.onPresetFinished = onPresetFinished
+        self.onTooHeavy = onTooHeavy
         link = CAMetalDisplayLink(metalLayer: layer)
         super.init()
         session.presetDuration = presetSeconds
@@ -399,6 +422,10 @@ private final class VisualizationRenderLoop: NSObject, CAMetalDisplayLinkDelegat
         perform { loop in
             loop.session.load(preset, at: loop.now, blend: blend)
             loop.finishReported = false
+            loop.costs.removeAll()
+            loop.framesSinceLoad = 0
+            loop.slowRun = 0
+            loop.heavyReported = false
         }
     }
 
@@ -419,6 +446,7 @@ private final class VisualizationRenderLoop: NSObject, CAMetalDisplayLinkDelegat
     }
 
     func metalDisplayLink(_ link: CAMetalDisplayLink, needsUpdate update: CAMetalDisplayLink.Update) {
+        let started = CACurrentMediaTime()
         let time = update.targetPresentationTimestamp - start
         let texture = update.drawable.texture
         guard let frame = session.frame(time: time, samples: samples.latest(1024), size: SIMD2(Double(texture.width), Double(texture.height))),
@@ -428,11 +456,28 @@ private final class VisualizationRenderLoop: NSObject, CAMetalDisplayLinkDelegat
         buffer.present(update.drawable)
         buffer.commit()
         frames.withLock { $0 += 1 }
+        measure(CACurrentMediaTime() - started)
         if !locked, !finishReported, session.elapsed(at: time) > presetSeconds, !session.isBlending {
             finishReported = true
             let finished = onPresetFinished
             Task { @MainActor in finished() }
         }
+    }
+}
+
+extension VisualizationRenderLoop {
+    /// Blends (two presets at once) and the first frames don't count.
+    fileprivate func measure(_ cost: Double) {
+        framesSinceLoad += 1
+        guard !heavyReported, !session.isBlending, framesSinceLoad > 5 else { return }
+        costs.append(cost)
+        if costs.count > 90 { costs.removeFirst() }
+        slowRun = cost > Self.stallLimit ? slowRun + 1 : 0
+        let average = costs.reduce(0, +) / Double(costs.count)
+        guard slowRun >= 5 || (costs.count >= 30 && average > Self.frameBudget) else { return }
+        heavyReported = true
+        let tooHeavy = onTooHeavy
+        Task { @MainActor in tooHeavy() }
     }
 }
 

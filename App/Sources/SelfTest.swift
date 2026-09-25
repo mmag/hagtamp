@@ -297,8 +297,41 @@ enum SelfTest {
         if let sheet = vis.presetSheetForTesting() {
             try? sheet.write(to: output.appendingPathComponent("visualization-presets.png"))
         }
+        await presetLibrarySteps(vis, output: output)
         model.stop()
         manager.toggleVisualization()
+    }
+
+    /// The preset folder is watched, a preset too slow for the display is
+    /// marked and passed over, and the browser lists them all.
+    private static func presetLibrarySteps(_ vis: VisualizationWindowController, output: URL) async {
+        let folder = PresetLibrary.userFolder
+        let pack = folder.appendingPathComponent("Pack", isDirectory: true)
+        try? FileManager.default.createDirectory(at: pack, withIntermediateDirectories: true)
+        let before = vis.library.presets.count
+        try? "[preset00]\nzoom=1.01\nper_frame_1=wave_r = 0.5 + 0.5 * sin(time);\n".write(
+            to: pack.appendingPathComponent("Watched.milk"), atomically: true, encoding: .utf8)
+        await wait("new preset noticed without reloading", seconds: 8) { vis.library.presets.count == before + 1 }
+        try? "[preset00]\nper_pixel_1=a = loop(3000, b = b + sin(b));\n".write(
+            to: folder.appendingPathComponent("Heavy.milk"), atomically: true, encoding: .utf8)
+        await wait("heavy preset noticed", seconds: 8) { vis.library.presets.contains { $0.lastPathComponent == "Heavy.milk" } }
+        if let heavy = vis.library.presets.first(where: { $0.lastPathComponent == "Heavy.milk" }) {
+            vis.show(heavy, blend: false)
+            await wait("heavy preset marked and passed over", seconds: 12) { vis.library.isHeavy(heavy) && vis.currentPresetName != "Heavy" }
+            print("selftest: after the heavy preset: \(vis.currentPresetName ?? "-"), heavy \(vis.library.heavy.sorted())")
+        }
+        vis.showBrowser()
+        try? await Task.sleep(for: .milliseconds(500))
+        if let window = NSApp.windows.first(where: { $0.title == "Presets" && $0.isVisible }), let image = capture(window) {
+            try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: output.appendingPathComponent("preset-browser.png"))
+            print("selftest: preset browser shown with \(vis.library.presets.count) presets")
+            window.close()
+        } else {
+            print("selftest: preset browser: MISSING")
+        }
+        try? FileManager.default.removeItem(at: pack)
+        try? FileManager.default.removeItem(at: folder.appendingPathComponent("Heavy.milk"))
+        await wait("removed presets leave the list", seconds: 8) { vis.library.presets.count == before }
     }
 
     /// Larger text: rows grow with it, fewer fit, clicks still find their row.

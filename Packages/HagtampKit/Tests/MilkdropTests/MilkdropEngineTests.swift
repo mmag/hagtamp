@@ -75,6 +75,16 @@ import Testing
         #expect(abs(uv(second, 8, 3).y - 0.4) < 1e-6 && abs(uv(second, 0, 3).y - 0.5) < 1e-6)
     }
 
+    /// A preset that loops millions of times per vertex still gives a frame
+    /// in about the time a frame's code is allowed.
+    @Test func loopsStopWhenTheFrameRunsOutOfTime() {
+        let engine = MilkdropEngine(preset: .parse("per_pixel_1=a = loop(1000000, b = b + 1);", name: "Heavy"))
+        let start = DispatchTime.now().uptimeNanoseconds
+        _ = engine.frame(time: 0, fps: 60, frame: 1, progress: 0, audio: .silence, aspect: square)
+        let seconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+        #expect(seconds < 0.6)
+    }
+
     /// Presets are files from anywhere: impossible values don't bring the app down.
     @Test func impossibleValuesDontCrash() {
         let (_, f) = frame("""

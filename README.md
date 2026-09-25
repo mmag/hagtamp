@@ -56,7 +56,9 @@
 
 - MilkDrop-style presets (`.milk`) drawn with Metal at a steady 60 fps, in a window or full screen.
 - Presets blend from one to the next, and the preset code runs as written: per-frame and per-vertex equations, custom waves and shapes.
-- Eight original presets are included. Add your own to `~/Library/Application Support/Hagtamp/Presets`.
+- Eight original presets are included. Add your own to `~/Library/Application Support/Hagtamp/Presets`: the folder is watched, so new presets show up by themselves.
+- The preset browser (P) lists them all, with search, even for tens of thousands of presets.
+- A preset too slow to keep up is marked and skipped in the automatic rotation. You can still pick it by hand.
 - MilkDrop 2 pixel shaders are not supported yet.
 
 ![Four of the bundled visualization presets](docs/screenshots/visualization.png)
@@ -104,7 +106,7 @@ The classic keys work in the main, equalizer and playlist windows.
 
 The visualization window has its own keys:
 - Space or → for the next preset, ← for the previous one.
-- H for a hard cut, R for random order, L to lock the current preset.
+- H for a hard cut, R for random order, L to lock the current preset, P for the preset browser.
 - F or Return for full screen, Esc to leave it.
 
 ## Development

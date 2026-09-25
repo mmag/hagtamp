@@ -41,6 +41,11 @@ public final class MilkdropEngine: @unchecked Sendable {
     static let motionVariables = ["zoom", "zoomexp", "rot", "warp", "cx", "cy", "dx", "dy", "sx", "sy"]
     static let inputVariables = ["time", "fps", "frame", "progress", "bass", "mid", "treb", "bass_att", "mid_att", "treb_att", "meshx", "meshy", "pixelsx", "pixelsy", "aspectx", "aspecty"]
 
+    /// Time the preset's code has for a frame (and its init code, once) before
+    /// its loops stop early.
+    static let frameTimeLimit: UInt64 = 150_000_000
+    static let initTimeLimit: UInt64 = 500_000_000
+
     public init(preset: MilkdropPreset, meshWidth: Int = 48, meshHeight: Int = 36) {
         self.preset = preset
         self.meshWidth = meshWidth
@@ -76,6 +81,8 @@ public final class MilkdropEngine: @unchecked Sendable {
         self.errors = errors
 
         // Init code runs once; the q values it leaves are where every frame starts.
+        global.deadline = DispatchTime.now().uptimeNanoseconds + Self.initTimeLimit
+        defer { global.deadline = .max }
         resetFrameVariables()
         setInputs(frameVars, time: 0, fps: 60, frame: 0, progress: 0, audio: .silence, aspect: SIMD2(1, 1))
         frameInit?.run(frameVars)
@@ -114,6 +121,8 @@ public final class MilkdropEngine: @unchecked Sendable {
     /// `aspect`: MilkDrop's aspectx/aspecty (1 along the longer side,
     /// shorter/longer along the other); `progress`: 0...1 through the preset's time.
     public func frame(time: Double, fps: Double, frame: Int, progress: Double, audio: MilkdropAudio, aspect: SIMD2<Double>) -> MilkdropFrame {
+        global.deadline = DispatchTime.now().uptimeNanoseconds + Self.frameTimeLimit
+        defer { global.deadline = .max }
         resetFrameVariables()
         for i in 0..<32 { frameVars["q\(i + 1)"] = qAfterInit[i] }
         setInputs(frameVars, time: time, fps: fps, frame: frame, progress: progress, audio: audio, aspect: aspect)

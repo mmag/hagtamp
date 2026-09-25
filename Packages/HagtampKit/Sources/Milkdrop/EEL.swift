@@ -32,10 +32,16 @@ public final class EELVariables: @unchecked Sendable {
     }
 }
 
-/// gmegabuf: memory every block of a preset shares.
+/// gmegabuf: memory every block of a preset shares, and the time its code
+/// has for the frame being made.
 public final class EELGlobalMemory: @unchecked Sendable {
     var cells: [Double] = []
+    /// `DispatchTime` uptime (ns) past which loops stop early: a preset that
+    /// loops millions of times per vertex can't hold a frame for seconds.
+    public var deadline: UInt64 = .max
     public init() {}
+
+    var isPastDeadline: Bool { DispatchTime.now().uptimeNanoseconds > deadline }
 }
 
 public struct EELError: Error, Equatable, CustomStringConvertible {
@@ -477,13 +483,21 @@ struct EELCompiler {
             return { vars in
                 let count = min(saturatingInt(a(vars)), Self.maxIterations)
                 var last = 0.0
-                if count > 0 { for _ in 0..<count { last = b(vars) } }
+                if count > 0 {
+                    for i in 0..<count {
+                        if i & 255 == 255, vars.global.isPastDeadline { break }
+                        last = b(vars)
+                    }
+                }
                 return last
             }
         case "while":
             return { vars in
                 var iterations = 0
-                while abs(a(vars)) >= Self.epsilon, iterations < Self.maxIterations { iterations += 1 }
+                while abs(a(vars)) >= Self.epsilon, iterations < Self.maxIterations {
+                    iterations += 1
+                    if iterations & 255 == 0, vars.global.isPastDeadline { break }
+                }
                 return 0
             }
         default:
