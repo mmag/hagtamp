@@ -119,7 +119,6 @@ The visualization window has its own keys:
 - `App/Sources` is the AppKit app around that core.
 - `make screenshots` regenerates the pictures above. The app plays a made-up library (invented artists, synthesized music, generated covers) in the default skin, muted, and captures its own windows.
 - `make corpus` then `make compare` renders about 300 skins from the Skin Museum and diffs them against the museum's screenshots.
-- `docs/PLAN.md` has the design decisions, what is done, and the open questions.
 
 ## Acknowledgements
 
