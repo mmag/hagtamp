@@ -71,6 +71,25 @@
 - macOS 14 Sonoma or later.
 - To build: Xcode with Swift 6 and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
+## Installing
+
+With Homebrew:
+
+```sh
+brew trust --cask mmag/tap/hagtamp
+brew install --cask mmag/tap/hagtamp
+```
+
+Homebrew loads casks only from taps you trust; the first line trusts this one cask. Later versions come with `brew upgrade --cask hagtamp`.
+
+Or download the zip from [Releases](https://github.com/mmag/hagtamp/releases) and move `Hagtamp.app` to Applications.
+
+The app isn't notarized by Apple, so macOS asks before opening it the first time: open **System Settings → Privacy & Security** and click **Open Anyway** next to the message about Hagtamp. Or, in Terminal:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Hagtamp.app
+```
+
 ## Building
 
 ```sh
