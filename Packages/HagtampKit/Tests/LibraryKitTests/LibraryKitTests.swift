@@ -193,6 +193,21 @@ final class Counter: Sendable {
         withExtendedLifetime(watcher) {}
     }
 
+    /// A watched folder inside an ignored one (the presets in ~/Library) still reports.
+    @Test func watchedFolderInsideAnIgnoredOneIsWatched() async throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let inner = music.appendingPathComponent("Presets")
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        let calls = Counter()
+        let watcher = FolderWatcher([inner], latency: 0.2, extensions: ["milk"], ignoring: [music]) { calls.add() }
+        try await Task.sleep(for: .milliseconds(800))
+        let before = calls.value
+        try Data("[preset00]".utf8).write(to: inner.appendingPathComponent("New.milk"))
+        for _ in 0..<50 where calls.value == before { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(calls.value > before)
+        withExtendedLifetime(watcher) {}
+    }
+
     /// A folder that is missing at a scan (a disk not mounted) keeps its tracks.
     @Test func unreachableFolderKeepsItsFiles() async throws {
         defer { try? FileManager.default.removeItem(at: folder) }

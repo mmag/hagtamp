@@ -12,7 +12,8 @@ public final class FolderWatcher: @unchecked Sendable {
 
     /// `extensions`: the files that matter (nil: all). Changes in `ignoring`,
     /// in hidden folders and in ~/Library never do: a library folder may be
-    /// the home folder, where the app keeps its own files.
+    /// the home folder, where the app keeps its own files. A watched folder
+    /// inside one of those (the presets in Application Support) is watched all the same.
     public init(
         _ folders: [URL], latency: TimeInterval = 3, extensions: Set<String>? = nil, ignoring: [URL] = [],
         onChange: @escaping @Sendable () -> Void
@@ -20,7 +21,7 @@ public final class FolderWatcher: @unchecked Sendable {
         self.onChange = onChange
         self.extensions = extensions
         let library = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library")
-        self.ignored = (ignoring + [library]).flatMap { url -> [String] in
+        func paths(_ url: URL) -> [String] {
             let path = url.standardizedFileURL.path
             let resolved = realpath(path, nil).map { pointer in
                 defer { free(pointer) }
@@ -28,6 +29,8 @@ public final class FolderWatcher: @unchecked Sendable {
             }
             return Set([path, resolved].compactMap { $0 }).map { $0.hasSuffix("/") ? $0 : $0 + "/" }
         }
+        let watched = folders.flatMap(paths)
+        self.ignored = (ignoring + [library]).flatMap(paths).filter { prefix in !watched.contains { $0.hasPrefix(prefix) } }
         guard !folders.isEmpty else { return }
         var context = FSEventStreamContext(
             version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil)
