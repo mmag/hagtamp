@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 import PlayerCore
 import Testing
 
@@ -79,6 +80,18 @@ private func fixture(_ name: String) throws -> Data {
         #expect(info.url.scheme == "hagtamp-nd")
     }
 
+    /// OpenSubsonic's replayGain: from the tags, or an empty object without them.
+    @Test func replayGainComesWithTheSong() throws {
+        func song(_ replayGain: String) throws -> NavidromeSong {
+            try JSONDecoder().decode(NavidromeSong.self, from: Data(#"{"id": "s", "title": "T", "replayGain": \#(replayGain)}"#.utf8))
+        }
+        let tagged = try song(#"{"trackGain": -7.25, "albumGain": -8.5, "trackPeak": 0.98, "albumPeak": 1.01}"#)
+        #expect(NavidromeTrack.info(for: tagged).replayGain == Loudness(trackGain: -7.25, trackPeak: 0.98, albumGain: -8.5, albumPeak: 1.01))
+        #expect(NavidromeTrack.info(for: try song("{}")).replayGain == nil)
+        #expect(NavidromeTrack.info(for: try song(#"{"trackGain": 0, "albumGain": 0, "trackPeak": 0, "albumPeak": 0}"#)).replayGain == nil)
+        #expect(NavidromeTrack.info(for: try song("null")).replayGain == nil)
+    }
+
     @Test func trackURLsSurvivePlaylistFiles() {
         let url = NavidromeTrack.url(songID: "30PGUBIdTH9naXE2q3Kiwf")
         let saved = PlaylistFile.data(for: [TrackInfo(url: url, title: "T", artist: "A", duration: 25)], format: .m3u8, base: URL(fileURLWithPath: "/tmp"))
@@ -126,6 +139,25 @@ private func fixture(_ name: String) throws -> Data {
         #expect(cache.peek("song") == first.url)
         #expect(!FileManager.default.fileExists(atPath: first.partialFile.path))
         #expect(try Data(contentsOf: first.url) == Data(repeating: 7, count: 300_000))
+    }
+
+    @Test func reportsFinishedDownloads() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-cache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let cache = AudioCache(directory: folder.appendingPathComponent("Caches"), offlineDirectory: folder.appendingPathComponent("Offline"), limit: 10_000_000)
+        let source = folder.appendingPathComponent("src")
+        try Data(repeating: 7, count: 1000).write(to: source)
+        let downloads = OSAllocatedUnfairLock<[String]>(initialState: [])
+        await cache.observeDownloads { key, file in downloads.withLock { $0.append("\(key) \(file.lastPathComponent)") } }
+
+        await cache.keepOffline(keyPrefixes: ["me@host-kept-"])
+        _ = try await cache.fetch(source, key: "me@host-song1-original", fileExtension: "flac")
+        _ = try await cache.fetch(source, key: "me@host-kept-mp3_320", fileExtension: "mp3")
+        _ = try? await cache.fetch(folder.appendingPathComponent("missing"), key: "me@host-gone-original", fileExtension: "mp3")
+        #expect(downloads.withLock { $0 } == ["me@host-song1-original me_host-song1-original.flac", "me@host-kept-mp3_320 me_host-kept-mp3_320.mp3"])
+
+        let files = cache.files(keyPrefix: "me@host-").map { "\($0.keySuffix) \($0.file.deletingLastPathComponent().lastPathComponent)" }
+        #expect(files.sorted() == ["kept-mp3_320 Offline", "song1-original Caches"])
     }
 
     @Test func musicKeptOfflineLivesApartFromTheCache() async throws {

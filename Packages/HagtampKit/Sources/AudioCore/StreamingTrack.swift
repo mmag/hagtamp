@@ -33,6 +33,15 @@ public final class StreamingTrack: @unchecked Sendable {
     func cancel() {
         source.cancel()
     }
+
+    /// Waits for the download to end; true when it completed.
+    public func downloaded() async -> Bool {
+        while !state.finished {
+            try? await Task.sleep(for: .milliseconds(250))
+            if Task.isCancelled { return false }
+        }
+        return state.error == nil
+    }
 }
 
 /// What the player hands to the engine: a complete file, a download in

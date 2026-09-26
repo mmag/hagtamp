@@ -18,11 +18,17 @@ protocol RemoteTrackResolver: AnyObject {
     /// Tags of an entry restored from the saved playlist, which keeps only
     /// "Artist - Title" and the length (nil: that is all there is).
     func info(for url: URL) async -> TrackInfo?
+    /// Where an entry's loudness is kept (nil: it is never measured, like radio).
+    func loudnessKey(for url: URL) -> String?
+    /// Reading the loudness of an entry's downloaded file (nil: not downloaded).
+    func loudnessJob(for url: URL) -> LoudnessService.Job?
 }
 
 extension RemoteTrackResolver {
     func isLive(_ url: URL) -> Bool { false }
     func info(for url: URL) async -> TrackInfo? { nil }
+    func loudnessKey(for url: URL) -> String? { nil }
+    func loudnessJob(for url: URL) -> LoudnessService.Job? { nil }
 }
 
 /// Player state as the UI sees it, on top of the audio engine.
@@ -38,6 +44,7 @@ final class PlayerModel {
     var onError: ((String) -> Void)?
 
     let engine = AudioEngine()
+    let loudness: LoudnessService
     /// Provide sources for entries that aren't local files, first match wins.
     var resolvers: [RemoteTrackResolver] = []
     private(set) var playlist = Playlist()
@@ -56,6 +63,9 @@ final class PlayerModel {
     private var prefetchTask: Task<Void, Never>?
     /// Moving on from an entry that failed; Stop or another start calls it off.
     private var skipTask: Task<Void, Never>?
+    /// Normalization gains of the entries handed to the engine, oldest
+    /// first: the one playing and the one queued after it.
+    private var gains: [(id: UUID, gain: TrackGain)] = []
 
     var volume: Double = 200.0 / 255.0 {
         didSet { engine.volume = volume; saveSettings(); changed() }
@@ -70,13 +80,24 @@ final class PlayerModel {
         didSet { requeue(); saveSettings(); changed() }
     }
 
+    /// Loudness normalization (Preferences).
+    var normalization = Normalization() {
+        didSet {
+            loudness.isEnabled = normalization.enabled
+            updateGains(includingStarted: true)
+            saveSettings()
+            changed()
+        }
+    }
+
     var equalizerEnabled = true { didSet { applyEqualizer() } }
     var equalizerAuto = false { didSet { saveSettings(); changed() } }
     var preamp = 0.5 { didSet { applyEqualizer() } }
     var bands = [Double](repeating: 0.5, count: 10) { didSet { applyEqualizer() } }
     private(set) var userPresets: [EqualizerPreset] = []
 
-    init() {
+    init(loudness: LoudnessService) {
+        self.loudness = loudness
         restoreSettings()
         restorePlaylist()
         restorePosition()
@@ -84,6 +105,8 @@ final class PlayerModel {
         engine.volume = volume
         engine.balance = balance
         applyEqualizer()
+        loudness.isEnabled = normalization.enabled
+        loudness.onRead = { [weak self] in self?.updateGains(includingStarted: false) }
     }
 
     var currentIndex: Int? { playlist.currentIndex }
@@ -234,6 +257,7 @@ final class PlayerModel {
         prefetchTask?.cancel()
         buffering = nil
         engine.stop()
+        gains = []
         queuedID = nil
         followingLiveID = nil
         streamTitle = nil
@@ -323,6 +347,7 @@ final class PlayerModel {
         }
         prefetchTask?.cancel()
         engine.stop()
+        gains = []
         queuedID = nil
         buffering = 0
         nowPlayingURL = entry.url
@@ -355,12 +380,14 @@ final class PlayerModel {
         resumeAt = nil
         startingID = entry.id
         do {
+            let gain = self.gain(for: entry)
             // Back where it was at the last quit, if the file can seek (a stream can't yet).
             if let resume, case .file(let file) = source, let duration = entry.info.duration, duration > 0 {
-                try engine.play(file, from: resume.seconds / duration)
+                gains = [(entry.id, try engine.play(file, from: resume.seconds / duration, gain: gain))]
             } else {
-                try engine.play(source)
+                gains = [(entry.id, try engine.play(source, gain: gain))]
             }
+            readLoudness(entry, source)
             localFiles[entry.id] = source.url
             nowPlayingURL = entry.url
             status = .playing
@@ -403,8 +430,10 @@ final class PlayerModel {
             guard let index = currentIndex, resolver(for: playlist[index].url) != nil,
                 let file = resolver(for: playlist[index].url)?.cachedFile(for: playlist[index].url)
             else { return }
-            startingID = playlist[index].id
-            guard (try? engine.play(file, from: fraction)) != nil else { return }
+            let entry = playlist[index]
+            startingID = entry.id
+            guard let handle = try? engine.play(file, from: fraction, gain: gain(for: entry)) else { return }
+            gains = [(entry.id, handle)]
             requeue(clearingQueue: false)
         }
         changed()
@@ -434,7 +463,11 @@ final class PlayerModel {
     /// play order changed). Remote followers start downloading ahead of time.
     private func requeue(clearingQueue: Bool = true) {
         guard status != .stopped, buffering == nil else { return }
-        if clearingQueue { engine.clearQueue() }
+        if clearingQueue {
+            engine.clearQueue()
+            // The track playing stays, and a queued one the player has begun decoding still plays.
+            gains = gains.prefix(1) + gains.dropFirst().filter { $0.gain.hasStarted }
+        }
         prefetchTask?.cancel()
         followingLiveID = nil
         guard !stopsAfterCurrent, let next = followingIndex() else {
@@ -444,7 +477,7 @@ final class PlayerModel {
         let entry = playlist[next]
         guard let resolver = resolver(for: entry.url) else {
             queuedID = entry.id
-            try? engine.enqueue(entry.url)
+            enqueue(entry, .file(entry.url))
             return
         }
         if resolver.isLive(entry.url) {
@@ -455,7 +488,7 @@ final class PlayerModel {
         queuedID = entry.id
         if let cached = resolver.cachedFile(for: entry.url) {
             localFiles[entry.id] = cached
-            try? engine.enqueue(cached)
+            enqueue(entry, .file(cached))
             return
         }
         prefetchTask = Task { [weak self] in
@@ -465,8 +498,14 @@ final class PlayerModel {
                 return
             }
             self.localFiles[entry.id] = source.url
-            try? self.engine.enqueue(source)
+            self.enqueue(entry, source)
         }
+    }
+
+    private func enqueue(_ entry: PlaylistEntry, _ source: PlayableSource) {
+        guard let handle = try? engine.enqueue(source, gain: gain(for: entry)) else { return }
+        gains.append((entry.id, handle))
+        readLoudness(entry, source)
     }
 
     /// The entry just handed to the engine by play(): the next "now playing"
@@ -535,6 +574,7 @@ final class PlayerModel {
     /// Self test: what a relaunch does with the saved position.
     func relaunchForTesting() {
         engine.stop()
+        gains = []
         status = .stopped
         restorePosition()
         changed()
@@ -551,6 +591,10 @@ final class PlayerModel {
         case .nowPlaying(let file?):
             if let index = entryIndex(playing: file) {
                 let changedTrack = index != currentIndex || playlist[index].id == queuedID
+                // Tracks before this one are done (it may follow itself, on repeat).
+                if changedTrack, let playing = gains.lastIndex(where: { $0.id == playlist[index].id && $0.gain.hasStarted }) {
+                    gains.removeFirst(playing)
+                }
                 setCurrent(index)
                 if nowPlayingURL != playlist[index].url { streamTitle = nil }
                 nowPlayingURL = playlist[index].url
@@ -576,6 +620,7 @@ final class PlayerModel {
                 // SFB leaves its engine running on silence (keeping the output
                 // device busy) until told to stop.
                 engine.stop()
+                gains = []
                 status = .stopped
                 queuedID = nil
                 streamTitle = nil
@@ -586,6 +631,62 @@ final class PlayerModel {
             onError?(message)
         }
         changed()
+    }
+
+    // MARK: - Loudness normalization
+
+    /// Where an entry's loudness is kept: its file's path, or its server's song.
+    private func loudnessKey(_ entry: PlaylistEntry) -> String? {
+        entry.url.isFileURL ? LoudnessService.key(forFile: entry.url) : resolver(for: entry.url)?.loudnessKey(for: entry.url)
+    }
+
+    /// The gain for an entry, dB: from its tags or as measured, its album's
+    /// while that album plays in order.
+    private func gain(for entry: PlaylistEntry) -> Double {
+        guard normalization.enabled else { return 0 }
+        let known = entry.info.replayGain ?? loudnessKey(entry).flatMap(loudness.loudness(forKey:))
+        let album = normalization.usesAlbumGain(shuffle: shuffle, continuesAlbum: continuesAlbum(entry))
+        return normalization.gain(for: known, album: album, typicalGain: loudness.typicalGain)
+    }
+
+    /// Whether the entry before or after this one is from the same album.
+    private func continuesAlbum(_ entry: PlaylistEntry) -> Bool {
+        let entries = playlist.entries
+        guard let album = entry.info.album?.lowercased(), !album.isEmpty, let index = entries.firstIndex(where: { $0.id == entry.id }) else {
+            return false
+        }
+        return [index - 1, index + 1].contains { entries.indices.contains($0) && entries[$0].info.album?.lowercased() == album }
+    }
+
+    /// Has an entry about to play read for its loudness, unless it is known;
+    /// a download once it is complete.
+    private func readLoudness(_ entry: PlaylistEntry, _ source: PlayableSource) {
+        guard normalization.enabled else { return }
+        guard let resolver = resolver(for: entry.url) else {
+            loudness.readSoon(file: entry.url)
+            return
+        }
+        switch source {
+        case .file:
+            if let job = resolver.loudnessJob(for: entry.url) { loudness.readSoon(job) }
+        case .stream(let track):
+            Task { [weak self, weak resolver] in
+                guard await track.downloaded(), let job = resolver?.loudnessJob(for: entry.url) else { return }
+                self?.loudness.readSoon(job)
+            }
+        case .live:
+            break
+        }
+    }
+
+    /// New gains for the tracks handed to the engine: all of them when the
+    /// settings change (a playing track glides to its new level), only
+    /// those not begun when a loudness becomes known (a track keeps its level).
+    private func updateGains(includingStarted: Bool) {
+        for (id, gain) in gains where includingStarted || !gain.hasStarted {
+            guard let entry = playlist.entries.first(where: { $0.id == id }) else { continue }
+            gain.decibels = self.gain(for: entry)
+        }
     }
 
     // MARK: - Equalizer
@@ -624,6 +725,7 @@ final class PlayerModel {
         var preamp: Double
         var bands: [Double]
         var userPresets: [EqualizerPreset]
+        var normalization: Normalization?
     }
 
     private static let settingsKey = "player"
@@ -662,7 +764,7 @@ final class PlayerModel {
         let settings = Settings(
             volume: volume, balance: balance, shuffle: shuffle, repeatEnabled: repeatEnabled,
             equalizerEnabled: equalizerEnabled, equalizerAuto: equalizerAuto, preamp: preamp, bands: bands,
-            userPresets: userPresets)
+            userPresets: userPresets, normalization: normalization)
         Storage.defaults.set(try? JSONEncoder().encode(settings), forKey: Self.settingsKey)
     }
 
@@ -681,6 +783,7 @@ final class PlayerModel {
         preamp = settings.preamp
         if settings.bands.count == 10 { bands = settings.bands }
         userPresets = settings.userPresets
+        if let saved = settings.normalization { normalization = saved }
     }
 
     private func changed() {

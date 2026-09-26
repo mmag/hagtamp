@@ -1,4 +1,5 @@
 import AppKit
+import PlayerCore
 import SwiftUI
 
 /// The Preferences window (⌘,): a tab per area, like macOS settings
@@ -94,6 +95,11 @@ private final class PreferencesTabs: NSTabViewController {
 final class PreferencesModel {
     let player: PlayerModel
     var resumesPosition: Bool { didSet { player.resumesPosition = resumesPosition } }
+    var normalizes: Bool { didSet { player.normalization.enabled = normalizes } }
+    var normalizationTarget: Double { didSet { player.normalization.target = normalizationTarget } }
+    var normalizationMode: Normalization.Mode { didSet { player.normalization.mode = normalizationMode } }
+    private(set) var loudnessStatus = ""
+    private var loudnessReported = Date.distantPast
     /// Percent; applied to the windows at once.
     var textPercent: Int {
         didSet { (NSApp.delegate as? AppDelegate)?.setTextScale(Double(textPercent) / 100) }
@@ -118,6 +124,9 @@ final class PreferencesModel {
     init(player: PlayerModel, navidrome: NavidromeService, library: LocalLibraryService) {
         self.player = player
         resumesPosition = player.resumesPosition
+        normalizes = player.normalization.enabled
+        normalizationTarget = player.normalization.target
+        normalizationMode = player.normalization.mode
         textPercent = Int(((NSApp.delegate as? AppDelegate)?.textScale ?? 1.5) * 100)
         self.navidrome = navidrome
         self.library = library
@@ -130,7 +139,18 @@ final class PreferencesModel {
         status = navidrome.isConfigured ? "Saved" : "Not set up"
         refreshUsage()
         refreshLibrary()
+        refreshLoudness()
         library.onStatusChange = { [weak self] in self?.refreshLibrary() }
+        player.loudness.onProgress = { [weak self] in self?.refreshLoudness() }
+    }
+
+    /// "1234 tracks measured, 56 to go"; a few times a second at most.
+    func refreshLoudness() {
+        let service = player.loudness
+        guard service.pendingCount == 0 || Date().timeIntervalSince(loudnessReported) > 0.5 else { return }
+        loudnessReported = Date()
+        let known = "\(service.knownCount) \(service.knownCount == 1 ? "track" : "tracks") known"
+        loudnessStatus = service.pendingCount == 0 ? known + "." : known + ", \(service.pendingCount) to go."
     }
 
     func refreshLibrary() {
@@ -236,6 +256,24 @@ private struct GeneralPreferences: View {
             Section("Playback") {
                 Toggle("Continue the track where it was when Hagtamp quit", isOn: $model.resumesPosition)
             }
+            Section("Loudness") {
+                Toggle("Play all tracks equally loud", isOn: $model.normalizes)
+                Picker("Level", selection: $model.normalizationTarget) {
+                    ForEach(Normalization.targets, id: \.self) { target in
+                        Text(Self.title(target)).tag(target)
+                    }
+                }
+                .disabled(!model.normalizes)
+                Picker("Albums", selection: $model.normalizationMode) {
+                    Text("Keep their balance when played in order").tag(Normalization.Mode.automatic)
+                    Text("Always keep their balance").tag(Normalization.Mode.album)
+                    Text("Level every track").tag(Normalization.Mode.track)
+                }
+                .disabled(!model.normalizes)
+                Caption(
+                    "Each track is turned up or down as a whole: nothing is compressed, and no track is turned up past its peak. "
+                        + "Loudness comes from ReplayGain tags or is measured in the background. \(model.loudnessStatus)")
+            }
             Section("Appearance") {
                 Picker("Text size", selection: $model.textPercent) {
                     ForEach([100, 125, 150, 175, 200], id: \.self) { percent in
@@ -244,6 +282,17 @@ private struct GeneralPreferences: View {
                 }
                 Caption("The playlist, library lists and lyrics.")
             }
+        }
+    }
+}
+
+extension GeneralPreferences {
+    static func title(_ target: Double) -> String {
+        let level = "\(Int(target)) LUFS".replacingOccurrences(of: "-", with: "−")
+        switch target {
+        case Loudness.referenceLoudness: return level + " (ReplayGain)"
+        case -14: return level + " (streaming services)"
+        default: return level
         }
     }
 }

@@ -85,6 +85,67 @@ func makeTone(seconds: Double = 1, frequency: Double = 1000, sampleRate: Double 
     }
 }
 
+extension AudioEngineTests {
+    /// The loudest sample the visualizer saw lately, once the engine has had time to get there.
+    private func settledPeak(_ engine: AudioEngine) async throws -> Float {
+        try await Task.sleep(for: .milliseconds(600))
+        return engine.samples.latest(2048).map(abs).max() ?? 0
+    }
+
+    /// Normalization gain reaches the audio (the visualizer taps it before
+    /// the volume), and changes while a track plays glide in.
+    @Test func appliesTrackGain() async throws {
+        let url = try makeTone(seconds: 4)  // peaks at 0.5
+        defer { try? FileManager.default.removeItem(at: url) }
+        let engine = AudioEngine()
+        engine.volume = 0
+        engine.setEqualizer(enabled: false, preamp: 0.5, bands: Array(repeating: 0.5, count: 10))
+        let gain = try engine.play(.file(url), gain: -20 * log10(2))
+        let halved = try await settledPeak(engine)
+        #expect(abs(halved - 0.25) < 0.01, "at −6 dB: \(halved)")
+        #expect(gain.hasStarted)
+
+        gain.decibels = 0
+        let restored = try await settledPeak(engine)
+        #expect(abs(restored - 0.5) < 0.01, "back at 0 dB: \(restored)")
+        engine.stop()
+    }
+
+    /// FLAC decodes to integers: turned up past full scale, it must not wrap around.
+    @Test func turnsIntegerDecodersUpWithoutWrapping() async throws {
+        let url = try encodedTone("flac")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let engine = AudioEngine()
+        engine.volume = 0
+        engine.setEqualizer(enabled: false, preamp: 0.5, bands: Array(repeating: 0.5, count: 10))
+        try engine.play(.file(url), gain: 20 * log10(3))  // 0.5 × 3 = 1.5
+        let peak = try await settledPeak(engine)
+        #expect(abs(peak - 1.5) < 0.02, "\(peak)")
+        engine.stop()
+    }
+
+    /// A queued track starts at its own gain, on the sample where it begins.
+    @Test func queuedTracksKeepTheirOwnGain() async throws {
+        let first = try makeTone(seconds: 1)
+        let second = try makeTone(seconds: 3)
+        defer {
+            try? FileManager.default.removeItem(at: first)
+            try? FileManager.default.removeItem(at: second)
+        }
+        let engine = AudioEngine()
+        engine.volume = 0
+        engine.setEqualizer(enabled: false, preamp: 0.5, bands: Array(repeating: 0.5, count: 10))
+        try engine.play(.file(first), gain: 0)
+        let queued = try engine.enqueue(.file(second), gain: -20 * log10(4))
+        #expect(!queued.hasStarted)
+        try await Task.sleep(for: .milliseconds(1500))
+        #expect(engine.nowPlayingURL?.lastPathComponent == second.lastPathComponent)
+        let peak = try await settledPeak(engine)
+        #expect(abs(peak - 0.125) < 0.01, "\(peak)")
+        engine.stop()
+    }
+}
+
 @Suite struct LocalLyricsTests {
     @Test func sidecarLRCComesFirst() throws {
         let url = try makeTone(seconds: 1)

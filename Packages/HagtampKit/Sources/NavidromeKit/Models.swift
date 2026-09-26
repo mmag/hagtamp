@@ -45,6 +45,15 @@ public struct NavidromeSong: Codable, Hashable, Sendable, Identifiable {
     public var contentType: String?
     public var size: Int?
     public var coverArt: String?
+    /// From the file's tags (OpenSubsonic); without tags the server sends an empty object.
+    public var replayGain: NavidromeReplayGain?
+}
+
+public struct NavidromeReplayGain: Codable, Hashable, Sendable {
+    public var trackGain: Double?
+    public var albumGain: Double?
+    public var trackPeak: Double?
+    public var albumPeak: Double?
 }
 
 public struct NavidromePlaylist: Codable, Hashable, Sendable, Identifiable {

@@ -47,6 +47,7 @@ final class NavidromeService: RemoteTrackResolver {
     private(set) var server: NavidromeServer?
     private(set) var client: NavidromeClient?
     let audioCache: AudioCache
+    private let loudness: LoudnessService
     private let coverFolder = Storage.cacheDirectory.appendingPathComponent("Covers", isDirectory: true)
 
     var quality: StreamQuality {
@@ -61,7 +62,8 @@ final class NavidromeService: RemoteTrackResolver {
         }
     }
 
-    init() {
+    init(loudness: LoudnessService) {
+        self.loudness = loudness
         let defaults = Storage.defaults
         quality = StreamQuality(rawValue: defaults.string(forKey: Keys.quality) ?? "") ?? .original
         let limit = defaults.integer(forKey: Keys.cacheLimit)
@@ -72,7 +74,13 @@ final class NavidromeService: RemoteTrackResolver {
             offlineDirectory: Storage.supportDirectory.appendingPathComponent("Offline", isDirectory: true),
             limit: Int64(limit > 0 ? limit : 2000) * 1_000_000)
         try? FileManager.default.createDirectory(at: coverFolder, withIntermediateDirectories: true)
-        Task { [audioCache] in await audioCache.removeInvalidFiles() }
+        let downloaded: @Sendable (String, URL) -> Void = { [weak self] key, file in
+            Task { @MainActor in self?.downloaded(key, file) }
+        }
+        Task { [audioCache] in
+            await audioCache.removeInvalidFiles()
+            await audioCache.observeDownloads(downloaded)
+        }
         Self.forgetHTTPCache()
         Self.trim(coverFolder, to: 150_000_000)
         Self.trim(Self.responseFolder, to: 50_000_000)
@@ -120,6 +128,7 @@ final class NavidromeService: RemoteTrackResolver {
             _ = try? await starredOnServer()
             _ = try? await refreshPlaylists()
         }
+        readCachedLoudness()
     }
 
     /// The same server at a new address (say an IP address replaced by a
@@ -273,6 +282,48 @@ final class NavidromeService: RemoteTrackResolver {
     func info(for url: URL) async -> TrackInfo? {
         guard let id = NavidromeTrack.songID(from: url), let client, let song = try? await client.song(id) else { return nil }
         return NavidromeTrack.info(for: song)
+    }
+
+    // MARK: - Loudness
+
+    /// A song's loudness is kept by server and song, whatever the quality.
+    func loudnessKey(for url: URL) -> String? {
+        guard let id = NavidromeTrack.songID(from: url), let server else { return nil }
+        return "navidrome:\(server.key):\(id)"
+    }
+
+    func loudnessJob(for url: URL) -> LoudnessService.Job? {
+        guard let file = downloadedFile(for: url) else { return nil }
+        return loudnessJob(for: url, file: file)
+    }
+
+    private func loudnessJob(for url: URL, file: URL) -> LoudnessService.Job? {
+        guard let key = loudnessKey(for: url), let server else { return nil }
+        return LoudnessService.Job(key: key, file: file, albumScope: "navidrome:\(server.key)")
+    }
+
+    /// A song downloaded (played, fetched ahead or kept offline) is read in the background.
+    private func downloaded(_ cacheKey: String, _ file: URL) {
+        guard let server, cacheKey.hasPrefix("\(server.key)-"), let id = Self.songID(fromKeySuffix: String(cacheKey.dropFirst(server.key.count + 1))),
+            let job = loudnessJob(for: NavidromeTrack.url(songID: id), file: file)
+        else { return }
+        loudness.readLater(job, source: "navidrome")
+    }
+
+    /// So are the songs in the cache and kept offline.
+    private func readCachedLoudness() {
+        guard let server else { return }
+        let jobs = audioCache.files(keyPrefix: "\(server.key)-").compactMap { suffix, file in
+            Self.songID(fromKeySuffix: suffix).flatMap { loudnessJob(for: NavidromeTrack.url(songID: $0), file: file) }
+        }
+        loudness.setBacklog(jobs, for: "navidrome")
+    }
+
+    /// The song in the rest of a cache key: "<song>-<quality>".
+    private static func songID(fromKeySuffix suffix: String) -> String? {
+        guard let quality = StreamQuality.allCases.first(where: { suffix.hasSuffix("-\($0.rawValue)") }) else { return nil }
+        let id = String(suffix.dropLast(quality.rawValue.count + 1))
+        return id.isEmpty ? nil : id
     }
 
     // MARK: - Keep offline

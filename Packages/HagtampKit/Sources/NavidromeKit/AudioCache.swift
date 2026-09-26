@@ -17,6 +17,7 @@ public actor AudioCache {
     /// Files handed to the player lately, which trimming and clearing leave be
     /// (a queued track is only opened when its turn comes).
     private nonisolated let inUse = OSAllocatedUnfairLock<[String]>(initialState: [])
+    private var onDownload: (@Sendable (_ key: String, _ file: URL) -> Void)?
 
     public init(directory: URL, offlineDirectory: URL? = nil, limit: Int64) {
         self.directory = directory
@@ -124,10 +125,29 @@ public actor AudioCache {
         return stream
     }
 
+    /// Called with each download that completes, where its file ended up.
+    public func observeDownloads(_ observer: @escaping @Sendable (_ key: String, _ file: URL) -> Void) {
+        onDownload = observer
+    }
+
     private func streamFinished(_ key: String) {
-        streams[key] = nil
+        let succeeded = streams.removeValue(forKey: key)?.state.error == nil
         settleOffline()
         trim()
+        if succeeded, let file = peek(key) { onDownload?(key, file) }
+    }
+
+    /// The finished files whose keys start with `keyPrefix`, cached or kept
+    /// offline, with the rest of their key (extension dropped).
+    public nonisolated func files(keyPrefix: String) -> [(keySuffix: String, file: URL)] {
+        let prefix = Self.fileName(keyPrefix)
+        return [directory, offlineDirectory].compactMap { $0 }.flatMap { folder in
+            ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+                .filter { $0.hasPrefix(prefix) && !$0.hasSuffix(".part") }
+                .map { name in
+                    (String((name as NSString).deletingPathExtension.dropFirst(prefix.count)), folder.appendingPathComponent(name))
+                }
+        }
     }
 
     /// Bytes in the cache (not counting music kept offline).

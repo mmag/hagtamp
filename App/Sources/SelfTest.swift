@@ -3,6 +3,7 @@ import AVFAudio
 import AppKit
 import ClassicUI
 import NavidromeKit
+import PlayerCore
 import SFBAudioEngine
 import SkinKit
 
@@ -46,6 +47,7 @@ enum SelfTest {
             await snapPreferences(to: output, tabs: PreferencesWindowController.Tab.allCases)
             checkRaising(manager)
             await audioSteps(manager, snap: snap)
+            await loudnessSteps(manager)
             await resumeSteps(manager)
             await playlistSteps(manager, snap: snap)
             await localLibrarySteps(manager, snap: snap)
@@ -127,6 +129,27 @@ enum SelfTest {
         model.stop()
         try? await Task.sleep(for: .milliseconds(200))
         print("selftest: stopped status=\(model.status)")
+    }
+
+    /// Normalization: the tones just played get measured, and a track then
+    /// plays at the gain its loudness calls for (the visualizer sees it).
+    private static func loudnessSteps(_ manager: WindowManager) async {
+        let model = manager.model
+        let tones = model.playlist.entries.map(\.url)
+        await wait("loudness of \(tones.count) tones measured") { tones.allSatisfy { model.loudness.loudness(forKey: $0.path) != nil } }
+        guard let first = tones.first, let loudness = model.loudness.loudness(forKey: first.path) else { return }
+        let gain = model.normalization.gain(for: loudness, album: false, typicalGain: model.loudness.typicalGain)
+        let equalizer = model.equalizerEnabled
+        model.equalizerEnabled = false  // an earlier step put a preset on
+        model.play(trackAt: 0)
+        try? await Task.sleep(for: .milliseconds(1000))
+        let peak = Double(model.engine.samples.latest(2048).map(abs).max() ?? 0)
+        model.equalizerEnabled = equalizer
+        let expected = 0.6 * pow(10, gain / 20)  // makeTone's level
+        print(
+            "selftest: loudness \(first.lastPathComponent) gain \(String(format: "%+.2f", loudness.trackGain)) dB, played at "
+                + "\(String(format: "%+.2f", gain)) dB: peak \(String(format: "%.3f", peak)) \(abs(peak - expected) < 0.02 ? "ok" : "WRONG (expected \(expected))")")
+        model.stop()
     }
 
     /// Selection, dragging, sorting and keyboard editing on nine generated files.

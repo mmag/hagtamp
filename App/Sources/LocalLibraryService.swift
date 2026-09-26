@@ -10,6 +10,7 @@ final class LocalLibraryService: LibrarySource {
     private static let foldersKey = "library.folders"
 
     private let library: LocalLibrary
+    private let loudness: LoudnessService
     private(set) var folders: [URL]
     private(set) var catalog = LibraryCatalog()
     private var favourites: LibraryFavourites
@@ -22,7 +23,8 @@ final class LocalLibraryService: LibrarySource {
     /// Preferences follow the folders and scanning too.
     var onStatusChange: (() -> Void)?
 
-    init() {
+    init(loudness: LoudnessService) {
+        self.loudness = loudness
         folders = (Storage.defaults.stringArray(forKey: Self.foldersKey) ?? []).map { URL(fileURLWithPath: $0, isDirectory: true) }
         library = LocalLibrary(indexFile: Storage.supportDirectory.appendingPathComponent("library.json"))
         favourites = (try? Data(contentsOf: Self.favouritesFile)).flatMap { try? JSONDecoder().decode(LibraryFavourites.self, from: $0) }
@@ -88,6 +90,13 @@ final class LocalLibraryService: LibrarySource {
         self.catalog = catalog
         catalogRevision += 1
         changed()
+        // Loudness of the library's files, in the background.
+        let jobs = catalog.albums.flatMap { catalog.tracks(ofAlbum: $0.id) }.map { entry in
+            LoudnessService.Job(
+                key: LoudnessService.key(forFile: entry.url), file: entry.url, albumScope: LoudnessService.fileAlbumScope, size: entry.fileSize,
+                modified: entry.modified)
+        }
+        loudness.setBacklog(jobs, for: "library")
     }
 
     private func progressChanged(_ progress: ScanProgress?) {

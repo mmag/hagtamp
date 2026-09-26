@@ -15,6 +15,10 @@ extension TrackInfo {
         info.sampleRate = properties.sampleRate
         info.channels = properties.channelCount.map(Int.init)
         info.bitrate = properties.bitrate.map { Int($0.rounded()) }
+        let tags = file.metadata
+        info.replayGain = Loudness(
+            tagged: tags.replayGainTrackGain, trackPeak: tags.replayGainTrackPeak, albumGain: tags.replayGainAlbumGain,
+            albumPeak: tags.replayGainAlbumPeak)
         return info
     }
 

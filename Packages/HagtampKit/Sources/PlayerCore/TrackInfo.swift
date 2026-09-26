@@ -16,6 +16,8 @@ public struct TrackInfo: Sendable, Equatable, Codable {
     /// Hz.
     public var sampleRate: Double?
     public var channels: Int?
+    /// ReplayGain values from the tags (or the server).
+    public var replayGain: Loudness?
 
     public init(url: URL, title: String? = nil, artist: String? = nil, duration: Double? = nil) {
         self.url = url

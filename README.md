@@ -25,11 +25,14 @@
 
 - Gapless playback of MP3, AAC, ALAC, FLAC, Ogg Vorbis, Opus, WavPack, Monkey's Audio, Musepack, WAV, AIFF, tracker modules and more, via [SFBAudioEngine](https://github.com/sbooth/SFBAudioEngine).
 - A 10-band equalizer with preamp and presets; `.eqf` files load and save.
+- Loudness normalization: tracks play equally loud, each turned up or down as a whole, never compressed and never past its peak. An album played in order keeps its own balance. ReplayGain tags are used where there are any, and everything else is measured in the background (EBU R128), local files and Navidrome songs alike.
 - The classic spectrum analyzer and oscilloscope, with all their styles.
 - The classic playlist editor: selection, dragging, sorting, jump to file, and `m3u`, `m3u8` and `pls` playlists. A right-click marks songs as favourites or adds them to a library playlist.
 - Internet radio: stream titles show in the marquee.
 - Media keys, headphone controls, Control Center and the Now Playing widget.
 - Optionally, playback resumes where it was when you quit.
+
+<img src="docs/screenshots/preferences.png" width="480" alt="Preferences: loudness normalization">
 
 ### Navidrome
 

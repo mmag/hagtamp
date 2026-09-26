@@ -6,10 +6,11 @@ import UniformTypeIdentifiers
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    private let model = PlayerModel()
-    private let navidrome = NavidromeService()
+    private let loudness = LoudnessService()
+    private lazy var model = PlayerModel(loudness: loudness)
+    private lazy var navidrome = NavidromeService(loudness: loudness)
     private let radio = RadioResolver()
-    private let localLibrary = LocalLibraryService()
+    private lazy var localLibrary = LocalLibraryService(loudness: loudness)
     private lazy var windows = WindowManager(model: model, skin: .base, navidrome: navidrome, localLibrary: localLibrary)
     private lazy var preferences = PreferencesWindowController(player: model, navidrome: navidrome, library: localLibrary)
 
@@ -29,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         windows.saveLayout()
         model.savePosition(force: true)
+        loudness.saveNow()
     }
 
     /// Finder "Open With": skins are applied, audio files are played.

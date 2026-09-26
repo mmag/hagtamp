@@ -135,6 +135,19 @@ enum Screenshots {
         await restartMarquee(manager)
         shots = stack(column, x: 0) + place(library, x: side, y: 0)
         save(compose(shots), to: output.appendingPathComponent("library.png"))
+
+        // The preferences, with loudness normalization, once the library is measured.
+        await wait(seconds: 120) { model.loudness.pendingCount == 0 }
+        // Active, so its controls show their colours: the app launched from a terminal isn't.
+        if let front = NSWorkspace.shared.frontmostApplication { NSRunningApplication.current.activate(from: front) }
+        (NSApp.delegate as? AppDelegate)?.showPreferences(tab: .general)
+        try? await Task.sleep(for: .seconds(1))
+        if let preferences = NSApp.windows.first(where: { $0.identifier == PreferencesWindowController.identifier }) {
+            preferences.makeFirstResponder(nil)  // no focus ring
+            try? await Task.sleep(for: .milliseconds(300))
+            save(SelfTest.capture(preferences), to: output.appendingPathComponent("preferences.png"))
+            preferences.close()
+        }
     }
 
     // MARK: - The library
@@ -160,8 +173,8 @@ enum Screenshots {
             for (n, track) in album.tracks.enumerated() {
                 let url = albumFolder.appendingPathComponent(String(format: "%02d %@.m4a", n + 1, track.title))
                 let isPlaying = album.artist == playing.artist && track.title == playing.title
-                // Only the song that plays needs sound; the others are silence of the right length.
-                guard isPlaying ? synthesize(seconds: track.seconds, to: url) : silence(seconds: track.seconds, to: url) else {
+                // Only the song that plays needs music; the others hum of the right length.
+                guard isPlaying ? synthesize(seconds: track.seconds, to: url) : hum(seconds: track.seconds, to: url) else {
                     print("screenshots: FAILED to write \(url.lastPathComponent)")
                     continue
                 }
@@ -192,12 +205,15 @@ enum Screenshots {
         return try? AVAudioFile(forWriting: url, settings: settings)
     }
 
-    private static func silence(seconds: Int, to url: URL) -> Bool {
+    /// A soft low hum: silence would have no loudness to measure.
+    private static func hum(seconds: Int, to url: URL) -> Bool {
         let rate = 22050.0
         guard let file = aacFile(url, rate: rate, channels: 1, bitrate: 32),
             let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(Double(seconds) * rate))
         else { return false }
-        buffer.frameLength = buffer.frameCapacity  // zeroed
+        buffer.frameLength = buffer.frameCapacity
+        let samples = buffer.floatChannelData![0]
+        for i in 0..<Int(buffer.frameLength) { samples[i] = 0.02 * Float(sin(2 * .pi * 110 * Double(i) / rate)) }
         return (try? file.write(from: buffer)) != nil
     }
 

@@ -26,6 +26,11 @@ public enum NavidromeTrack {
         info.bitrate = song.bitRate
         info.sampleRate = song.samplingRate.map(Double.init)
         info.channels = song.channelCount
+        // Zeros and no peak: a server filling in what the tags lack.
+        info.replayGain = song.replayGain.flatMap {
+            $0.trackGain == 0 && ($0.trackPeak ?? 0) == 0
+                ? nil : Loudness(tagged: $0.trackGain, trackPeak: $0.trackPeak, albumGain: $0.albumGain, albumPeak: $0.albumPeak)
+        }
         return info
     }
 }

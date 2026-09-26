@@ -12,6 +12,7 @@ public enum EngineState: Sendable {
 /// with preamp, balance, volume, and a sample feed for the visualizer.
 ///
 /// Graph: decoder source → equalizer → balance mixer → main mixer (volume) → output.
+/// Each track's normalization gain is applied as it is decoded (`GainDecoder`).
 @MainActor
 public final class AudioEngine {
     public enum Event: Sendable {
@@ -62,32 +63,39 @@ public final class AudioEngine {
         try enqueue(.file(url))
     }
 
-    /// Starts a file or a stream now, dropping anything queued.
-    public func play(_ source: PlayableSource) throws {
-        let decoder = try source.decoder()
-        try player.play(decoder)
+    /// Starts a file or a stream now, dropping anything queued. `gain` in dB
+    /// (loudness normalization); the result changes it later.
+    @discardableResult
+    public func play(_ source: PlayableSource, gain: Double = 0) throws -> TrackGain {
+        let track = TrackGain(try source.decoder(), decibels: gain)
+        try player.play(track.decoder)
         releaseAll()
-        handedOut = [(decoder, source.release)]
+        handedOut = [(track.decoder, source.release)]
+        return track
     }
 
     /// Starts a file at `fraction` of its length, dropping anything queued;
     /// playback stays paused if it was.
-    public func play(_ url: URL, from fraction: Double) throws {
-        let decoder = PositionedDecoder(decoder: try AudioDecoder(url: url), fraction: fraction)
+    @discardableResult
+    public func play(_ url: URL, from fraction: Double, gain: Double = 0) throws -> TrackGain {
+        let track = TrackGain(PositionedDecoder(decoder: try AudioDecoder(url: url), fraction: fraction), decibels: gain)
         if player.isPaused {
-            try player.enqueue(decoder, immediate: true)
+            try player.enqueue(track.decoder, immediate: true)
         } else {
-            try player.play(decoder)
+            try player.play(track.decoder)
         }
         releaseAll()
-        handedOut = [(decoder, nil)]
+        handedOut = [(track.decoder, nil)]
+        return track
     }
 
     /// Queues a file or a stream to follow the current track without a gap.
-    public func enqueue(_ source: PlayableSource) throws {
-        let decoder = try source.decoder()
-        try player.enqueue(decoder)
-        handedOut.append((decoder, source.release))
+    @discardableResult
+    public func enqueue(_ source: PlayableSource, gain: Double = 0) throws -> TrackGain {
+        let track = TrackGain(try source.decoder(), decibels: gain)
+        try player.enqueue(track.decoder)
+        handedOut.append((track.decoder, source.release))
+        return track
     }
 
     /// Drops queued tracks the player hasn't started decoding. (Their
@@ -158,6 +166,28 @@ public final class AudioEngine {
         for (band, position) in zip(eq.bands, bands) {
             band.gain = Float(EqualizerPreset.decibels(position))
         }
+    }
+}
+
+/// The gain of one track handed to the engine (loudness normalization).
+public final class TrackGain: @unchecked Sendable {
+    let decoder: GainDecoder
+
+    init(_ decoder: any PCMDecoding, decibels: Double) {
+        self.decoder = GainDecoder(decoder: decoder, gain: Self.linear(decibels))
+        self.decibels = decibels
+    }
+
+    /// Set while the track plays, the level glides to the new gain.
+    @MainActor public var decibels: Double {
+        didSet { decoder.gain = Self.linear(decibels) }
+    }
+
+    /// Decoding has begun: the gain it began with is about to be heard.
+    public var hasStarted: Bool { decoder.hasStarted }
+
+    static func linear(_ decibels: Double) -> Float {
+        Float(pow(10, decibels / 20))
     }
 }
 
