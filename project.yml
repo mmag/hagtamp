@@ -42,6 +42,8 @@ targets:
         product: Milkdrop
       - package: HagtampKit
         product: MilkdropMetal
+      - package: HagtampKit
+        product: UpdateKit
     info:
       path: App/Info.plist
       properties:

@@ -1,0 +1,29 @@
+{
+  "url": "https://api.github.com/repos/mmag/hagtamp/releases/397189003",
+  "html_url": "https://github.com/mmag/hagtamp/releases/tag/v0.1.2",
+  "id": 397189003,
+  "tag_name": "v0.1.2",
+  "target_commitish": "main",
+  "name": "Hagtamp 0.1.2",
+  "draft": false,
+  "prerelease": false,
+  "created_at": "2026-09-26T10:20:23Z",
+  "published_at": "2026-09-26T10:20:47Z",
+  "body": "Tracks now play equally loud, without anything being compressed.\n\n<img src=\"https://raw.githubusercontent.com/mmag/hagtamp/v0.1.2/docs/screenshots/preferences.png\" width=\"480\" alt=\"Preferences: loudness normalization\">\n\n## What's new\n\n- **Loudness normalization**, on by default: each track is turned up or down as a whole, so that everything plays at the level you choose (−16 LUFS unless you pick another). Nothing within a track changes: no compression, no limiter, and no track is turned up past its peak, so nothing clips.\n- **Albums keep their balance** when they play in order: a quiet song stays quieter than the loud ones around it. In a mix or on shuffle every track is levelled on its own. Both are in **Preferences → General → Loudness**.\n- **Where the loudness comes from:** ReplayGain tags, where a file has them (Navidrome passes them on too). Everything else is measured in the background (EBU R128): the track about to play first, then your local library and the Navidrome cache. The preferences show how far it has got. A track not measured yet plays at the typical level of your music.\n- Between gapless tracks the level changes on the exact sample; when you change the settings, it glides to the new level.\n\nLoud modern recordings come down by several dB, so music may sound quieter overall than before. Turn up the volume, or choose a louder level (−14 or −12 LUFS).\n\n## Install\n\n```sh\nbrew trust --cask mmag/tap/hagtamp\nbrew install --cask mmag/tap/hagtamp\n```\n\nHomebrew loads casks only from taps you trust; the first line trusts this one cask. Already installed with Homebrew: `brew trust --cask mmag/tap/hagtamp`, then `brew upgrade --cask hagtamp`.\n\nOr download `Hagtamp-0.1.2.zip` below and move `Hagtamp.app` to Applications.\n\nRequires macOS 14 Sonoma or later. It runs natively on Apple silicon and Intel Macs.\n\n## First launch\n\nThis build isn't notarized by Apple, so macOS asks before opening it the first time. Open **System Settings → Privacy & Security** and click **Open Anyway** next to the message about Hagtamp. Or, in Terminal:\n\n```sh\nxattr -dr com.apple.quarantine /Applications/Hagtamp.app\n```\n",
+  "assets": [
+    {
+      "url": "https://api.github.com/repos/mmag/hagtamp/releases/assets/590435915",
+      "id": 590435915,
+      "name": "Hagtamp-0.1.2.zip",
+      "label": "",
+      "content_type": "application/zip",
+      "state": "uploaded",
+      "size": 8390935,
+      "digest": "sha256:da7edc6b1844a3bec8addb32ad69617762dc99c84d6330e1e80c06cb8b11e6a8",
+      "download_count": 1,
+      "created_at": "2026-09-26T10:20:45Z",
+      "updated_at": "2026-09-26T10:20:47Z",
+      "browser_download_url": "https://github.com/mmag/hagtamp/releases/download/v0.1.2/Hagtamp-0.1.2.zip"
+    }
+  ]
+}

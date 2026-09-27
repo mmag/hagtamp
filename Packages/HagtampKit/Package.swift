@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "LibraryKit", targets: ["LibraryKit"]),
         .library(name: "Milkdrop", targets: ["Milkdrop"]),
         .library(name: "MilkdropMetal", targets: ["MilkdropMetal"]),
+        .library(name: "UpdateKit", targets: ["UpdateKit"]),
         .executable(name: "skintool", targets: ["skintool"]),
     ],
     dependencies: [
@@ -44,6 +45,7 @@ let package = Package(
             name: "LibraryKit",
             dependencies: ["PlayerCore", .product(name: "SFBAudioEngine", package: "SFBAudioEngine")]
         ),
+        .target(name: "UpdateKit"),
         .executableTarget(name: "skintool", dependencies: ["SkinKit", "ClassicUI"]),
         .testTarget(
             name: "SkinKitTests",
@@ -62,6 +64,7 @@ let package = Package(
             resources: [.copy("Fixtures")]),
         .testTarget(name: "NavidromeKitTests", dependencies: ["NavidromeKit"], resources: [.copy("Fixtures")]),
         .testTarget(name: "MilkdropTests", dependencies: ["Milkdrop", "MilkdropMetal"]),
+        .testTarget(name: "UpdateKitTests", dependencies: ["UpdateKit"], resources: [.copy("Fixtures")]),
         .testTarget(
             name: "LibraryKitTests",
             dependencies: ["LibraryKit", .product(name: "SFBAudioEngine", package: "SFBAudioEngine")]),

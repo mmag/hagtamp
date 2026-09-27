@@ -58,6 +58,7 @@ enum SelfTest {
             await textSizeSteps(manager, snap: snap)
             await visualizationSteps(manager, output: output)
             await controlSteps(manager, output: output)
+            await updateSteps(output: output)
             layoutSteps(manager)
             NSApp.terminate(nil)
         }
@@ -150,6 +151,30 @@ enum SelfTest {
             "selftest: loudness \(first.lastPathComponent) gain \(String(format: "%+.2f", loudness.trackGain)) dB, played at "
                 + "\(String(format: "%+.2f", gain)) dB: peak \(String(format: "%.3f", peak)) \(abs(peak - expected) < 0.02 ? "ok" : "WRONG (expected \(expected))")")
         model.stop()
+    }
+
+    /// The update offer, for a release described in a file (nothing is downloaded or installed).
+    private static func updateSteps(output: URL) async {
+        let feed = output.appendingPathComponent("release.json")
+        let release = """
+            {"tag_name": "v9.9.9", "name": "Hagtamp 9.9.9", "draft": false, "prerelease": false,
+             "html_url": "https://github.com/mmag/hagtamp/releases/tag/v9.9.9",
+             "body": "Intro.\\n\\n## What's new\\n\\n- **Made up**: a release for the self test.\\n- A second line with a [link](https://example.com).\\n\\n## Install\\n\\nNot shown.",
+             "assets": [{"name": "Hagtamp-9.9.9.zip", "size": 8000000, "browser_download_url": "https://example.com/Hagtamp-9.9.9.zip"}]}
+            """
+        try? release.write(to: feed, atomically: true, encoding: .utf8)
+        setenv("HAGTAMP_UPDATE_FEED", feed.absoluteString, 1)
+        defer { unsetenv("HAGTAMP_UPDATE_FEED") }
+        (NSApp.delegate as? AppDelegate)?.checkForUpdates(nil)
+        func offerWindow() -> NSWindow? { NSApp.windows.first { $0.title == "Software Update" && $0.isVisible } }
+        await wait("update offered") { offerWindow() != nil }
+        guard let window = offerWindow() else { return }
+        try? await Task.sleep(for: .milliseconds(300))
+        if let image = capture(window) {
+            try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: output.appendingPathComponent("update-offer.png"))
+        }
+        print("selftest: update offer size=\(window.frame.size)")
+        window.close()
     }
 
     /// Selection, dragging, sorting and keyboard editing on nine generated files.

@@ -13,6 +13,7 @@ extension WindowManager {
         let menu = NSMenu()
         let app = NSApp.delegate as? AppDelegate
         menu.addItem(Self.item("About Hagtamp…") { NSApp.orderFrontStandardAboutPanel(nil) })
+        menu.addItem(Self.item("Check for Updates…") { app?.checkForUpdates(nil) })
         menu.addItem(.separator())
         menu.addItem(Self.item("Play File…", key: "l") { [weak self] in self?.openFiles() })
         menu.addItem(Self.item("Play URL…", key: "l", .control) { [weak self] in self?.playURL() })

@@ -93,6 +93,8 @@ The app isn't notarized by Apple, so macOS asks before opening it the first time
 xattr -dr com.apple.quarantine /Applications/Hagtamp.app
 ```
 
+From then on Hagtamp keeps itself up to date: once a day it looks for a new release and offers to install it (it relaunches) or download it. **Check for Updates…** is in the Hagtamp menu, and the daily check can be turned off in **Preferences → General**. A copy installed with Homebrew updates the same way; `brew upgrade` catches up later.
+
 ## Building
 
 ```sh

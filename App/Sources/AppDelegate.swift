@@ -12,7 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let radio = RadioResolver()
     private lazy var localLibrary = LocalLibraryService(loudness: loudness)
     private lazy var windows = WindowManager(model: model, skin: .base, navidrome: navidrome, localLibrary: localLibrary)
-    private lazy var preferences = PreferencesWindowController(player: model, navidrome: navidrome, library: localLibrary)
+    private let updates = UpdateController()
+    private lazy var preferences = PreferencesWindowController(player: model, navidrome: navidrome, library: localLibrary, updates: updates)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model.resolvers = [navidrome, radio]
@@ -23,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         windows.start()
         NSApp.activate()
+        updates.start()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -76,6 +78,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windows.playURL()
     }
 
+    @objc func checkForUpdates(_ sender: Any?) {
+        updates.checkNow()
+    }
+
     @objc func showPreferences(_ sender: Any?) {
         preferences.show()
     }
@@ -102,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Hagtamp", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Preferences…", action: #selector(showPreferences(_:)), keyEquivalent: ",")
         appMenu.addItem(.separator())

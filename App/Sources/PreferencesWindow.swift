@@ -32,13 +32,15 @@ final class PreferencesWindowController {
     private let player: PlayerModel
     private let navidrome: NavidromeService
     private let library: LocalLibraryService
+    private let updates: UpdateController
     private var window: NSWindow?
     private var tabs: NSTabViewController?
 
-    init(player: PlayerModel, navidrome: NavidromeService, library: LocalLibraryService) {
+    init(player: PlayerModel, navidrome: NavidromeService, library: LocalLibraryService, updates: UpdateController) {
         self.player = player
         self.navidrome = navidrome
         self.library = library
+        self.updates = updates
     }
 
     /// Opens the window, on `tab` if given.
@@ -50,7 +52,7 @@ final class PreferencesWindowController {
     }
 
     private func makeWindow() -> NSWindow {
-        let model = PreferencesModel(player: player, navidrome: navidrome, library: library)
+        let model = PreferencesModel(player: player, navidrome: navidrome, library: library, updates: updates)
         let tabs = PreferencesTabs()
         tabs.tabStyle = .toolbar
         tabs.addTabViewItem(item(.general, GeneralPreferences(model: model)))
@@ -106,6 +108,7 @@ final class PreferencesModel {
     }
     let navidrome: NavidromeService
     let library: LocalLibraryService
+    let updates: UpdateController
     private(set) var libraryFolders: [URL] = []
     private(set) var libraryStatus = ""
     var url: String
@@ -121,7 +124,8 @@ final class PreferencesModel {
     var cacheUsageMB = 0
     var offlineUsageMB = 0
 
-    init(player: PlayerModel, navidrome: NavidromeService, library: LocalLibraryService) {
+    init(player: PlayerModel, navidrome: NavidromeService, library: LocalLibraryService, updates: UpdateController) {
+        self.updates = updates
         self.player = player
         resumesPosition = player.resumesPosition
         normalizes = player.normalization.enabled
@@ -151,6 +155,19 @@ final class PreferencesModel {
         loudnessReported = Date()
         let known = "\(service.knownCount) \(service.knownCount == 1 ? "track" : "tracks") known"
         loudnessStatus = service.pendingCount == 0 ? known + "." : known + ", \(service.pendingCount) to go."
+    }
+
+    /// "Version 0.1.2, checked today at 14:05" and the like.
+    var updateStatus: String {
+        let version = "Version \(UpdateController.version?.description ?? "?")"
+        switch updates.status {
+        case .checking: return "Checking…"
+        case .available(let newer): return "Version \(newer) is available."
+        case .failed(let message): return "Couldn't check: \(message)"
+        case .idle, .upToDate:
+            guard let checked = updates.lastCheck else { return version + "." }
+            return version + ", checked " + checked.formatted(.relative(presentation: .named)) + "."
+        }
     }
 
     func refreshLibrary() {
@@ -273,6 +290,16 @@ private struct GeneralPreferences: View {
                 Caption(
                     "Each track is turned up or down as a whole: nothing is compressed, and no track is turned up past its peak. "
                         + "Loudness comes from ReplayGain tags or is measured in the background. \(model.loudnessStatus)")
+            }
+            Section("Updates") {
+                Toggle("Check for updates automatically", isOn: Bindable(model.updates).checksAutomatically)
+                HStack {
+                    Button("Check Now") { model.updates.checkNow() }
+                        .disabled(model.updates.status == .checking)
+                    Spacer()
+                    Text(model.updateStatus).foregroundStyle(.secondary).lineLimit(2)
+                }
+                Caption("Once a day Hagtamp looks for a new release on GitHub and offers to install it.")
             }
             Section("Appearance") {
                 Picker("Text size", selection: $model.textPercent) {
