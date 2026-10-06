@@ -29,6 +29,7 @@ final class SkinView: NSView {
     var cursors: CursorController?
 
     private var bitmapWidth = 1
+    private var shown: (bitmap: Bitmap, image: CGImage)?
     private var isTrackingMouse = false
 
     override init(frame frameRect: NSRect) {
@@ -49,9 +50,15 @@ final class SkinView: NSView {
     /// Winamp reacts to the first click even in an inactive window.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    /// The windows are redrawn at every UI tick; a bitmap that hasn't changed
+    /// and is still up skips the image conversion and the window server's
+    /// recompositing.
     func show(_ bitmap: Bitmap) {
+        if let shown, shown.bitmap == bitmap, layer?.contents as AnyObject? === shown.image { return }
         bitmapWidth = max(1, bitmap.width)
-        layer?.contents = bitmap.makeCGImage()
+        let image = bitmap.makeCGImage()
+        layer?.contents = image
+        shown = (bitmap, image)
     }
 
     private func skinPoint(_ event: NSEvent) -> SkinPoint {
