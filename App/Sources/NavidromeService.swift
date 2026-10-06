@@ -135,14 +135,14 @@ final class NavidromeService: RemoteTrackResolver {
     /// host name): its music kept offline and its cache carry over. It counts
     /// as the same server when an album or playlist kept offline is there too.
     private func adoptOfflineMusic(of previous: NavidromeServer) {
-        let all = Self.savedPins()
+        let all = savedPins
         guard let server, let client, let pins = all[previous.key], let probe = pins.first, all[server.key]?.isEmpty ?? true else { return }
         Task {
             let found = (try? await (probe.kind == .album ? client.album(probe.id).song : client.playlist(probe.id).entry)) != nil
             guard found, self.server?.key == server.key else { return }
-            var all = Self.savedPins()
+            var all = self.savedPins
             all[server.key] = all.removeValue(forKey: previous.key)
-            try? JSONEncoder().encode(all).write(to: Self.pinsFile, options: .atomic)
+            self.savedPins = all
             await audioCache.renameFiles(prefix: "\(previous.key)-", to: "\(server.key)-")
             protectOfflineSongs()
             onChange?()
@@ -341,19 +341,29 @@ final class NavidromeService: RemoteTrackResolver {
 
     /// Pins of the configured server.
     var offlinePins: [OfflinePin] {
-        get { server.flatMap { Self.savedPins()[$0.key] } ?? [] }
+        get { server.flatMap { savedPins[$0.key] } ?? [] }
         set {
             guard let server else { return }
-            var all = Self.savedPins()
-            all[server.key] = newValue
-            try? JSONEncoder().encode(all).write(to: Self.pinsFile, options: .atomic)
+            savedPins[server.key] = newValue
             protectOfflineSongs()
         }
     }
 
-    private static func savedPins() -> [String: [OfflinePin]] {
-        (try? Data(contentsOf: pinsFile)).flatMap { try? JSONDecoder().decode([String: [OfflinePin]].self, from: $0) } ?? [:]
+    /// Pins of every server, by server key. The file is read once: the
+    /// library asks about every album row at each redraw.
+    private var savedPins: [String: [OfflinePin]] {
+        get {
+            if let loadedPins { return loadedPins }
+            let pins = (try? Data(contentsOf: Self.pinsFile)).flatMap { try? JSONDecoder().decode([String: [OfflinePin]].self, from: $0) } ?? [:]
+            loadedPins = pins
+            return pins
+        }
+        set {
+            loadedPins = newValue
+            try? JSONEncoder().encode(newValue).write(to: Self.pinsFile, options: .atomic)
+        }
     }
+    private var loadedPins: [String: [OfflinePin]]?
 
     private var offlineSongIDs: Set<String> { Set(offlinePins.flatMap(\.songIDs)) }
     /// Songs downloaded / to download while keeping music offline.
@@ -415,7 +425,7 @@ final class NavidromeService: RemoteTrackResolver {
     /// Music kept offline for any server stays out of the cache's reach,
     /// not only the configured one's.
     private func protectOfflineSongs() {
-        let prefixes = Set(Self.savedPins().flatMap { key, pins in pins.flatMap(\.songIDs).map { "\(key)-\($0)-" } })
+        let prefixes = Set(savedPins.flatMap { key, pins in pins.flatMap(\.songIDs).map { "\(key)-\($0)-" } })
         Task { await audioCache.keepOffline(keyPrefixes: prefixes) }
     }
 
