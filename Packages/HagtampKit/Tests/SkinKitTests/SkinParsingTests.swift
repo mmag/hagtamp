@@ -136,6 +136,27 @@ import Testing
         #expect(SkinFont.sprite(for: "’") == SkinFont.sprite(for: "'"))
         #expect(SkinFont.sprite(for: "3").rect == PixelRect(x: 15, y: 6, width: 5, height: 6))
     }
+
+    @Test func cyrillicTakesLookAlikesOrIsDrawnInTheSkinsColours() {
+        // Same shape as a Latin capital: the skin's own glyph (lower case and Ё too).
+        #expect(SkinFont.sprite(for: "р") == SkinFont.sprite(for: "P"))
+        #expect(SkinFont.sprite(for: "Ё") == SkinFont.sprite(for: "E"))
+        #expect(SkinFont.extraMask(for: "Р") == nil)
+        // Others are drawn: every Russian capital is covered.
+        let russian = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"
+        #expect(russian.allSatisfy { SkinFont.extraMask(for: $0) != nil || SkinFont.sprite(for: $0) != SkinFont.sprite(for: " ") })
+        #expect(SkinFont.extraMask(for: "ж") == SkinFont.extraMask(for: "Ж"))
+
+        // A font with a gradient: two ink colours by row, a dark blue background.
+        var text = Bitmap(width: 155, height: 18, fill: PixelColor(rgb: 0x000020))
+        for letter in 0..<26 {
+            for y in 0..<6 { text[letter * 5 + 1, y] = PixelColor(rgb: y < 3 ? 0xFFFF00 : 0xFF8000) }
+        }
+        let palette = SkinFont.Palette(text)
+        let glyph = palette.glyph(SkinFont.extraMask(for: "П")!)
+        #expect(glyph[0, 0] == PixelColor(rgb: 0xFFFF00) && glyph[0, 5] == PixelColor(rgb: 0xFF8000))
+        #expect(glyph[1, 1] == PixelColor(rgb: 0x000020) && glyph[4, 0] == PixelColor(rgb: 0x000020))
+    }
 }
 
 enum BMPTestImage {

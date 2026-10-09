@@ -27,13 +27,21 @@ extension Bitmap {
 
     mutating func drawText(_ skin: Skin, _ text: String, x: Int, y: Int, clip: PixelRect?) {
         var cursor = x
+        // Letters the font lacks (Cyrillic) are drawn in its colours.
+        var palette: SkinFont.Palette?
         for character in text {
             defer { cursor += SkinFont.glyphWidth }
             if let clip {
                 if cursor >= clip.maxX { break }
                 if cursor + SkinFont.glyphWidth <= clip.x { continue }
             }
-            draw(skin, SkinFont.sprite(for: character), x: cursor, y: y, clip: clip)
+            if let mask = SkinFont.extraMask(for: character), let sheet = skin.bitmap(.text) {
+                if palette == nil { palette = SkinFont.Palette(sheet) }
+                let glyph = palette!.glyph(mask)
+                draw(glyph, from: glyph.bounds, atX: cursor, y: y, clip: clip)
+            } else {
+                draw(skin, SkinFont.sprite(for: character), x: cursor, y: y, clip: clip)
+            }
         }
     }
 }
