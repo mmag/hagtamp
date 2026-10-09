@@ -520,8 +520,15 @@ enum SelfTest {
         }
         try? await Task.sleep(for: .seconds(2))
         let playing = frames.filter { $0.type == PanelFeedFormat.display }.count
-        // Any visualizer option changing sends the status with all of them.
+        // The sound moves on every frame, not only with the tap's buffers (ten a
+        // second): the oscilloscope's line changes nearly every tick.
         let saved = manager.visualizerSettings
+        manager.visualizerSettings.mode = .oscilloscope
+        let scopeStart = frames.count
+        try? await Task.sleep(for: .seconds(1))
+        let scope = frames[scopeStart...].filter { $0.type == PanelFeedFormat.display }.count
+        manager.visualizerSettings = saved
+        // Any visualizer option changing sends the status with all of them.
         manager.visualizerSettings.oscilloscopeStyle = saved.oscilloscopeStyle == .dots ? .solid : .dots
         manager.visualizerSettings.peaks.toggle()
         try? await Task.sleep(for: .milliseconds(200))
@@ -553,6 +560,7 @@ enum SelfTest {
         print("selftest: panel feed frames on connecting: \(greeting == ["1:13952", "2:3728"] ? "ok" : "WRONG \(greeting)")")
         let sizes = Set(frames.map { "\($0.type):\($0.size)" })
         print("selftest: panel feed display while playing: \(playing >= 15 && sizes.isSubset(of: ["1:13952", "2:3728"]) ? "ok" : "WRONG") (\(playing) in 2 s, \(sizes.sorted()))")
+        print("selftest: panel feed oscilloscope moves every frame: \(scope >= 40 ? "ok" : "WRONG") (\(scope) in 1 s)")
         print("selftest: panel feed display when paused and stopped: \(paused <= 2 && stopped >= 1 ? "ok" : "WRONG") (\(paused) in 1 s paused, \(stopped) on stopping)")
         feed.isEnabled = false
         await wait("panel feed closes") { feed.state.isEmpty }

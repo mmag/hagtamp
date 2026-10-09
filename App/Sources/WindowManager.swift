@@ -174,7 +174,7 @@ final class WindowManager: NSObject {
         switch model.status {
         case .playing:
             visualizerFrame = visualizer.render(
-                samples: model.engine.samples.latest(1024), colors: skin.visColors,
+                samples: model.engine.samples.current(1024), colors: skin.visColors,
                 settings: visualizerSettings, small: main.shade)
             renderMain()
         case .paused:

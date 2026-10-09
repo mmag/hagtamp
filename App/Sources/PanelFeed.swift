@@ -224,7 +224,7 @@ final class PanelFeed {
             visualizerFrame = nil
         } else if model.status == .playing {
             visualizerFrame = visualizer.render(
-                samples: model.engine.samples.latest(1024), colors: windows.skin.visColors, settings: windows.visualizerSettings, small: false)
+                samples: model.engine.samples.current(1024), colors: windows.skin.visColors, settings: windows.visualizerSettings, small: false)
         }
         for (type, bitmap) in frames() where sent[type] != bitmap {
             sent[type] = bitmap

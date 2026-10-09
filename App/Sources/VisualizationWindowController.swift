@@ -449,7 +449,7 @@ private final class VisualizationRenderLoop: NSObject, CAMetalDisplayLinkDelegat
         let started = CACurrentMediaTime()
         let time = update.targetPresentationTimestamp - start
         let texture = update.drawable.texture
-        guard let frame = session.frame(time: time, samples: samples.latest(1024), size: SIMD2(Double(texture.width), Double(texture.height))),
+        guard let frame = session.frame(time: time, samples: samples.current(1024), size: SIMD2(Double(texture.width), Double(texture.height))),
             let buffer = renderer.makeCommandBuffer()
         else { return }
         renderer.render(frame, to: texture, commandBuffer: buffer)
