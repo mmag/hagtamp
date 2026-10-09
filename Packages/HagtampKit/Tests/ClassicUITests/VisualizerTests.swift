@@ -68,3 +68,29 @@ import Testing
         #expect(settings.nextMode == .analyzer)
     }
 }
+
+@Suite struct PanelFeedFormatTests {
+    @Test func frameHasTheHeaderThenRGBARowsTopDown() {
+        var bitmap = Bitmap(width: 83, height: 42, fill: PixelColor(rgb: 0x102030))
+        bitmap[1, 0] = PixelColor(rgb: 0xFF8000)
+        bitmap[0, 1] = PixelColor(rgb: 0x0000FF)
+        let data = [UInt8](PanelFeedFormat.frame(bitmap, type: PanelFeedFormat.display, sequence: 0x0102_0304))
+        #expect(data.count == 8 + 83 * 42 * 4)
+        #expect(Array(data[0..<8]) == [0x01, 83, 42, 0x00, 0x04, 0x03, 0x02, 0x01])
+        #expect(Array(data[8..<12]) == [0x10, 0x20, 0x30, 0xFF])
+        #expect(Array(data[12..<16]) == [0xFF, 0x80, 0x00, 0xFF])
+        #expect(Array(data[8 + 83 * 4..<12 + 83 * 4]) == [0x00, 0x00, 0xFF, 0xFF])
+    }
+
+    @Test func theDisplayHoldsTheTimeAndVisualizer() {
+        let display = PanelFeedFormat.displayRect, marquee = PanelFeedFormat.marqueeRect
+        #expect(display.contains(x: 24, y: 43) && display.contains(x: 24 + 75, y: 43 + 15))  // the visualizer
+        #expect(display.contains(x: 48, y: 26))  // the time
+        #expect((marquee.width, marquee.height) == (155, 6))
+    }
+
+    @Test func colorsAsHex() {
+        #expect(PanelFeedFormat.hex(PixelColor(rgb: 0x0A_FF_3C)) == "#0AFF3C")
+        #expect(PanelFeedFormat.hex(VisColors.default[0]) == "#000000")
+    }
+}

@@ -59,6 +59,7 @@ enum SelfTest {
             await visualizationSteps(manager, output: output)
             await controlSteps(manager, output: output)
             await updateSteps(output: output)
+            await panelFeedSteps(manager)
             layoutSteps(manager)
             NSApp.terminate(nil)
         }
@@ -488,6 +489,75 @@ enum SelfTest {
         CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution])
     }
 
+    /// The panel feed: a WebSocket client gets the skin, the status and the
+    /// main window's display and title on connecting, then the display as it
+    /// changes (with the sound about ten times a second, the bars falling in
+    /// between; a blink a second when paused).
+    private static func panelFeedSteps(_ manager: WindowManager) async {
+        guard let feed = manager.panelFeed else {
+            print("selftest: panel feed: MISSING")
+            return
+        }
+        let port = 24300 + Int.random(in: 0..<500)
+        Storage.defaults.set(port, forKey: PanelFeed.portKey)
+        feed.isEnabled = true
+        await wait("panel feed listens") { feed.state.hasPrefix("On ws://127.0.0.1:\(port)") }
+        if let tone = makeTone(frequency: 440, name: "panel", seconds: 8, pulse: 3) { manager.model.load([tone], play: true) }
+        await wait("panel feed tone plays") { manager.model.status == .playing }
+
+        let socket = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)")!)
+        socket.resume()
+        var texts: [String] = []
+        var frames: [(type: UInt8, size: Int)] = []
+        let reader = Task { @MainActor in
+            while let message = try? await socket.receive() {
+                switch message {
+                case .string(let text): texts.append(text)
+                case .data(let data): frames.append((data.first ?? 0, data.count))
+                @unknown default: break
+                }
+            }
+        }
+        try? await Task.sleep(for: .seconds(2))
+        let playing = frames.filter { $0.type == PanelFeedFormat.display }.count
+        // Any visualizer option changing sends the status with all of them.
+        let saved = manager.visualizerSettings
+        manager.visualizerSettings.oscilloscopeStyle = saved.oscilloscopeStyle == .dots ? .solid : .dots
+        manager.visualizerSettings.peaks.toggle()
+        try? await Task.sleep(for: .milliseconds(200))
+        let options = texts.compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])?["visualizer"] as? [String: Any] }
+        let sawOptions =
+            options.contains { $0["oscilloscopeStyle"] as? String == manager.visualizerSettings.oscilloscopeStyle.rawValue && $0["peaks"] as? Bool == saved.peaks }
+            && options.last?["peaks"] as? Bool == !saved.peaks && options.last?["bandWidth"] as? String == saved.bandWidth.rawValue
+        manager.visualizerSettings = saved
+        manager.model.pause()
+        try? await Task.sleep(for: .milliseconds(300))
+        let pauseStart = frames.count
+        try? await Task.sleep(for: .seconds(1))
+        let paused = frames[pauseStart...].filter { $0.type == PanelFeedFormat.display }.count
+        let stopStart = frames.count
+        manager.model.stop()
+        try? await Task.sleep(for: .milliseconds(500))
+        let stopped = frames.count - stopStart
+        socket.cancel(with: .goingAway, reason: nil)
+        reader.cancel()
+
+        let first = texts.first.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+        let colors = first?["visColors"] as? [String] ?? []
+        print("selftest: panel feed skin: \(first?["type"] as? String == "skin" && colors.count == 24 ? "ok" : "WRONG \(texts.first ?? "-")")")
+        let states = texts.compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])?["state"] as? String }
+        let modes = texts.compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])?["visMode"] as? String }
+        print("selftest: panel feed status: \(states.first == "playing" && states.contains("paused") && states.last == "stopped" && modes.first == "analyzer" ? "ok" : "WRONG \(states) \(modes)")")
+        let greeting = frames.prefix(2).map { "\($0.type):\($0.size)" }
+        print("selftest: panel feed visualizer options: \(sawOptions ? "ok" : "WRONG \(options)")")
+        print("selftest: panel feed frames on connecting: \(greeting == ["1:13952", "2:3728"] ? "ok" : "WRONG \(greeting)")")
+        let sizes = Set(frames.map { "\($0.type):\($0.size)" })
+        print("selftest: panel feed display while playing: \(playing >= 15 && sizes.isSubset(of: ["1:13952", "2:3728"]) ? "ok" : "WRONG") (\(playing) in 2 s, \(sizes.sorted()))")
+        print("selftest: panel feed display when paused and stopped: \(paused <= 2 && stopped >= 1 ? "ok" : "WRONG") (\(paused) in 1 s paused, \(stopped) on stopping)")
+        feed.isEnabled = false
+        await wait("panel feed closes") { feed.state.isEmpty }
+    }
+
     private static func wait(_ what: String, seconds: Double = 8, until done: () -> Bool) async {
         let deadline = Date().addingTimeInterval(seconds)
         while !done() && Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
@@ -768,7 +838,8 @@ enum SelfTest {
             context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code)!
     }
 
-    private static func makeTone(frequency: Double, name: String, seconds: Double = 3) -> URL? {
+    /// A sine, `pulse` times a second swelling from silence (0: steady).
+    private static func makeTone(frequency: Double, name: String, seconds: Double = 3, pulse: Double = 0) -> URL? {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("hagtamp-\(name).wav")
         let rate = 44100.0
         let settings: [String: Any] = [
@@ -781,7 +852,9 @@ enum SelfTest {
         buffer.frameLength = buffer.frameCapacity
         for channel in 0..<Int(file.processingFormat.channelCount) {
             for i in 0..<Int(buffer.frameLength) {
-                buffer.floatChannelData![channel][i] = 0.6 * Float(sin(2 * .pi * frequency * Double(i) / rate))
+                let t = Double(i) / rate
+                let swell = pulse > 0 ? 0.5 - 0.5 * cos(2 * .pi * pulse * t) : 1
+                buffer.floatChannelData![channel][i] = Float(0.6 * swell * sin(2 * .pi * frequency * t))
             }
         }
         try? file.write(from: buffer)

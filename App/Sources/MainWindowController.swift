@@ -22,6 +22,15 @@ final class MainWindowController: SkinWindowController {
     }
     override func renderBitmap() -> Bitmap { MainWindowRenderer.render(manager.skin, state()) }
 
+    /// The window as the panel feed sends it: full size even when shaded,
+    /// with the feed's own visualizer frame.
+    func panelState(visualizer: Bitmap?) -> MainWindowState {
+        var s = state()
+        s.shade = false
+        s.visualizer = visualizer
+        return s
+    }
+
     private func state() -> MainWindowState {
         let model = manager.model
         var s = MainWindowState()

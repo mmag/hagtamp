@@ -64,10 +64,13 @@ final class WindowManager: NSObject {
             Storage.defaults.set(try? JSONEncoder().encode(visualizerSettings), forKey: "visualizer")
             if visualizerSettings.mode == .off { visualizerFrame = nil }
             renderMain()
+            panelFeed?.visualizerChanged()
         }
     }
     private var move: (start: NSPoint, moving: [WindowBox], stationary: [WindowBox])?
     private(set) lazy var nowPlaying = NowPlaying(model: model) { [weak self] url in await self?.cover(for: url) }
+    /// The visualizer feed for outside displays, told what changes.
+    weak var panelFeed: PanelFeed?
 
     init(model: PlayerModel, skin: Skin, navidrome: NavidromeService, localLibrary: LocalLibraryService) {
         self.model = model
@@ -131,6 +134,7 @@ final class WindowManager: NSObject {
         cursors.load(skin)
         render()
         onSkinChange?(skin)
+        panelFeed?.skinChanged()
     }
 
     // MARK: - Rendering
@@ -239,6 +243,7 @@ final class WindowManager: NSObject {
         if model.status != .paused { pausedSince = nil }
         render()
         nowPlaying.update()
+        panelFeed?.playerChanged()
     }
 
     // MARK: - Windows

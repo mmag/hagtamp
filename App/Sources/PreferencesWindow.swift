@@ -33,14 +33,16 @@ final class PreferencesWindowController {
     private let navidrome: NavidromeService
     private let library: LocalLibraryService
     private let updates: UpdateController
+    private let panelFeed: PanelFeed
     private var window: NSWindow?
     private var tabs: NSTabViewController?
 
-    init(player: PlayerModel, navidrome: NavidromeService, library: LocalLibraryService, updates: UpdateController) {
+    init(player: PlayerModel, navidrome: NavidromeService, library: LocalLibraryService, updates: UpdateController, panelFeed: PanelFeed) {
         self.player = player
         self.navidrome = navidrome
         self.library = library
         self.updates = updates
+        self.panelFeed = panelFeed
     }
 
     /// Opens the window, on `tab` if given.
@@ -52,7 +54,7 @@ final class PreferencesWindowController {
     }
 
     private func makeWindow() -> NSWindow {
-        let model = PreferencesModel(player: player, navidrome: navidrome, library: library, updates: updates)
+        let model = PreferencesModel(player: player, navidrome: navidrome, library: library, updates: updates, panelFeed: panelFeed)
         let tabs = PreferencesTabs()
         tabs.tabStyle = .toolbar
         tabs.addTabViewItem(item(.general, GeneralPreferences(model: model)))
@@ -109,6 +111,7 @@ final class PreferencesModel {
     let navidrome: NavidromeService
     let library: LocalLibraryService
     let updates: UpdateController
+    let panelFeed: PanelFeed
     private(set) var libraryFolders: [URL] = []
     private(set) var libraryStatus = ""
     var url: String
@@ -124,8 +127,9 @@ final class PreferencesModel {
     var cacheUsageMB = 0
     var offlineUsageMB = 0
 
-    init(player: PlayerModel, navidrome: NavidromeService, library: LocalLibraryService, updates: UpdateController) {
+    init(player: PlayerModel, navidrome: NavidromeService, library: LocalLibraryService, updates: UpdateController, panelFeed: PanelFeed) {
         self.updates = updates
+        self.panelFeed = panelFeed
         self.player = player
         resumesPosition = player.resumesPosition
         normalizes = player.normalization.enabled
@@ -300,6 +304,12 @@ private struct GeneralPreferences: View {
                     Text(model.updateStatus).foregroundStyle(.secondary).lineLimit(2)
                 }
                 Caption("Once a day Hagtamp looks for a new release on GitHub and offers to install it.")
+            }
+            Section("Visualizer feed") {
+                Toggle("Send the visualizer to other apps on this Mac", isOn: Bindable(model.panelFeed).isEnabled)
+                Caption(
+                    "Apps such as a display panel can show the visualizer and what is playing. Only this Mac can connect. "
+                        + model.panelFeed.state)
             }
             Section("Appearance") {
                 Picker("Text size", selection: $model.textPercent) {

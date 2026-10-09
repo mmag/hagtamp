@@ -13,7 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var localLibrary = LocalLibraryService(loudness: loudness)
     private lazy var windows = WindowManager(model: model, skin: .base, navidrome: navidrome, localLibrary: localLibrary)
     private let updates = UpdateController()
-    private lazy var preferences = PreferencesWindowController(player: model, navidrome: navidrome, library: localLibrary, updates: updates)
+    private lazy var panelFeed = PanelFeed(model: model, windows: windows)
+    private lazy var preferences = PreferencesWindowController(
+        player: model, navidrome: navidrome, library: localLibrary, updates: updates, panelFeed: panelFeed)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model.resolvers = [navidrome, radio]
@@ -23,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             loadSkin(from: URL(fileURLWithPath: path), remember: false)
         }
         windows.start()
+        windows.panelFeed = panelFeed
         NSApp.activate()
         updates.start()
     }
